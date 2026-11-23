@@ -249,6 +249,10 @@ OVERVIEW_LOGOS=[('cryo.png',260,'https://cryoscope-project.eu/','cryoscope-proje
 OVERVIEW_FUNDING=('cryoscope.png',760)
 # source code of the model, the prediction and validation scripts and this app; shown on the Overview page under the intro
 REPO_URL='https://github.com/fmidev/ml-cryoscope'
+# icon before the 'Code' link: GitHub's own mark as github.png in LOGO_DIR or next to the app (from github.com/logos);
+# without the file a plain code icon is shown
+REPO_ICON='github.png'
+REPO_ICON_PX=20
 # Overview page: the pages by section, drawn as a grid of links (section, short note, accent colour, [(page, url_path, what it shows)]);
 # url_path must match NAV at the end of the file
 OVERVIEW_SECTIONS=[
@@ -868,6 +872,19 @@ def snowfall_html(n=SNOWFLAKES):
         pile='<div class="snow-pile" aria-hidden="true"><i class="b"></i><i class="f"></i></div>'
     return css+'<div class="snow-layer" aria-hidden="true">'+''.join(flakes)+'</div>'+pile
 
+def repo_link_html():
+    # 'Code: github.com/...' with the GitHub mark in front of it, all on one line and aligned to the text
+    from html import escape as e
+    p=logo(REPO_ICON)
+    if p:
+        import base64
+        with open(p,'rb') as f: b64=base64.b64encode(f.read()).decode()
+        icon=(f'<img src="data:image/png;base64,{b64}" alt="GitHub" '
+              f'style="height:{REPO_ICON_PX}px;width:auto;vertical-align:-4px;margin-right:0.4rem">')
+    else:
+        icon='<span style="margin-right:0.4rem">&lt;/&gt;</span>'
+    return (f'<p>{icon}Code: <a href="{e(REPO_URL)}" target="_blank" rel="noopener">{e(REPO_URL.split("://")[-1])}</a></p>')
+
 def page_overview():
     # site description and the logos, no results (those are on the other pages)
     global SHOW_FOOTER
@@ -876,7 +893,7 @@ def page_overview():
     st.title(APP_NAME)
     st.markdown('**CryoSCOPE snow water equivalent (SWE) ML model**')
     st.markdown(OVERVIEW_INTRO)
-    if REPO_URL: st.markdown(f'Code: [{REPO_URL.split("://")[-1]}]({REPO_URL})')
+    if REPO_URL: st.markdown(repo_link_html(),unsafe_allow_html=True)
     st.markdown(overview_pages_html(),unsafe_allow_html=True)
     st.write('')
     # logos side by side, vertically centred in their row; the links in a row of their own, so they line up
