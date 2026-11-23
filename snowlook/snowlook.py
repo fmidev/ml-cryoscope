@@ -249,9 +249,10 @@ OVERVIEW_LOGOS=[('cryo.png',260,'https://cryoscope-project.eu/','cryoscope-proje
 OVERVIEW_FUNDING=('cryoscope.png',760)
 # source code of the model, the prediction and validation scripts and this app; shown on the Overview page under the intro
 REPO_URL='https://github.com/fmidev/ml-cryoscope'
-# icon before the 'Code' link: GitHub's own mark as github.png in LOGO_DIR or next to the app (from github.com/logos);
-# without the file a plain code icon is shown
+# icon before the 'Code' link: GitHub's own mark as github.png (black, light theme) and github_white.png (dark theme)
+# in LOGO_DIR or next to the app (from github.com/logos); without the files a plain code icon is shown
 REPO_ICON='github.png'
+REPO_ICON_DARK='github_white.png'
 REPO_ICON_PX=20
 # Overview page: the pages by section, drawn as a grid of links (section, short note, accent colour, [(page, url_path, what it shows)]);
 # url_path must match NAV at the end of the file
@@ -872,18 +873,33 @@ def snowfall_html(n=SNOWFLAKES):
         pile='<div class="snow-pile" aria-hidden="true"><i class="b"></i><i class="f"></i></div>'
     return css+'<div class="snow-layer" aria-hidden="true">'+''.join(flakes)+'</div>'+pile
 
+def _icon_b64(name):
+    p=logo(name)
+    if not p: return None
+    import base64
+    with open(p,'rb') as f: return base64.b64encode(f.read()).decode()
+
+def _theme_type():
+    # 'light' or 'dark' of the page as the viewer sees it (streamlit >= 1.46), None when streamlit can not tell
+    try: return st.context.theme.type
+    except Exception: return None
+
 def repo_link_html():
-    # 'Code: github.com/...' with the GitHub mark in front of it, all on one line and aligned to the text
+    # 'Code: github.com/...' with the GitHub mark in front of it, black on a light theme and white on a dark one
     from html import escape as e
-    p=logo(REPO_ICON)
-    if p:
-        import base64
-        with open(p,'rb') as f: b64=base64.b64encode(f.read()).decode()
-        icon=(f'<img src="data:image/png;base64,{b64}" alt="GitHub" '
-              f'style="height:{REPO_ICON_PX}px;width:auto;vertical-align:-4px;margin-right:0.4rem">')
+    light,dark=_icon_b64(REPO_ICON),_icon_b64(REPO_ICON_DARK)
+    sty=f'height:{REPO_ICON_PX}px;width:auto;vertical-align:-4px;margin-right:0.4rem'
+    img_tag=lambda b64,cls='': f'<img class="{cls}" src="data:image/png;base64,{b64}" alt="GitHub" style="{sty}">'
+    theme=_theme_type()
+    if light and dark and theme is None:
+        # theme unknown: both icons, the browser's light / dark setting picks one
+        icon=('<style>.gh-dark{display:none}@media (prefers-color-scheme:dark){.gh-light{display:none}.gh-dark{display:inline}}</style>'
+              +img_tag(light,'gh-light')+img_tag(dark,'gh-dark'))
+    elif light or dark:
+        icon=img_tag(dark if (theme=='dark' and dark) or not light else light)
     else:
         icon='<span style="margin-right:0.4rem">&lt;/&gt;</span>'
-    return (f'<p>{icon}Code: <a href="{e(REPO_URL)}" target="_blank" rel="noopener">{e(REPO_URL.split("://")[-1])}</a></p>')
+    return f'<p>{icon}Code: <a href="{e(REPO_URL)}" target="_blank" rel="noopener">{e(REPO_URL.split("://")[-1])}</a></p>'
 
 def page_overview():
     # site description and the logos, no results (those are on the other pages)
