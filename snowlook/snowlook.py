@@ -877,7 +877,10 @@ def _icon_b64(name):
     p=logo(name)
     if not p: return None
     import base64
-    with open(p,'rb') as f: return base64.b64encode(f.read()).decode()
+    try:
+        with open(p,'rb') as f: return base64.b64encode(f.read()).decode()
+    except OSError as e:   # e.g. not readable by the container user: skip the icon instead of breaking the page
+        print(f'icon {p} not read: {e}'); return None
 
 def _theme_type():
     # 'light' or 'dark' of the page as the viewer sees it (streamlit >= 1.46), None when streamlit can not tell
