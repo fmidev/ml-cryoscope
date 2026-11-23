@@ -1,0 +1,22 @@
+# sudo docker compose -p snowlook up -d --build   (own project name, does not touch smartmet-server, caddy or the other containers)
+services:
+  snowlook:
+    build: .
+    image: snowlook:latest
+    container_name: snowlook
+    restart: unless-stopped
+    environment:
+      - SWE_SMARTMET_URL=${SWE_SMARTMET_URL:-https://sm.cryo-scope.eu}
+      - SWE_WMS_URL=${SWE_WMS_URL:-https://sm.cryo-scope.eu/wms}
+    volumes:
+      - /home/ubuntu/data/cryoscope:/data/cryoscope
+      - /home/ubuntu/data/ML:/data/ML
+    ports:
+      - "127.0.0.1:8503:8503"
+    networks:
+      - caddy_net
+
+networks:
+  caddy_net:
+    name: harvesterseasons-smartmet_default
+    external: true
