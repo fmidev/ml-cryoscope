@@ -876,7 +876,7 @@ def page_overview():
     st.title(APP_NAME)
     st.markdown('**CryoSCOPE snow water equivalent (SWE) ML model**')
     st.markdown(OVERVIEW_INTRO)
-    if REPO_URL: st.markdown(f'Source code of the model, the prediction and validation scripts and this site: [{REPO_URL.split("://")[-1]}]({REPO_URL})')
+    if REPO_URL: st.markdown(f'Code: [{REPO_URL.split("://")[-1]}]({REPO_URL})')
     st.markdown(overview_pages_html(),unsafe_allow_html=True)
     st.write('')
     # logos side by side, vertically centred in their row; the links in a row of their own, so they line up
