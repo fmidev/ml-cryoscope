@@ -1,0 +1,12 @@
+*.csv
+*.csv.gz
+*.parquet
+*.grib
+*.grib2
+*.nc
+*.sqlite3
+*.pkl
+app_cache/
+__pycache__/
+.cdsapirc
+*.env
