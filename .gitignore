@@ -10,3 +10,5 @@ app_cache/
 __pycache__/
 .cdsapirc
 *.env
+Dockerfile
+docker-compose.yml
