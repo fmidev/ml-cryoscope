@@ -5,8 +5,8 @@
 
 cd /home/ubuntu/data/cryoscope/snowmodel/
 
-training_lonlats_file='hkl_scandi_alps_training_lonlats.txt'
-validation_lonlats_file='hkl_scandi_alps_validation_lonlats.txt'
+training_lonlats_file='snowcap_scandi_alps_training_lonlats.txt'
+validation_lonlats_file='snowcap_scandi_alps_validation_lonlats.txt'
 
 
 
