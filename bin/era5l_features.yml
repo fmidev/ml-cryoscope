@@ -11,6 +11,7 @@ sources:
       ro:   "RO-M:ERA5L:5099:1:0:1:0"
       sf:   "SNACC-KGM2:ERA5L:5099:1:0:1:0"
       tp:   "RR-M:ERA5L:5099:1:0:1:0"
+      tmax: ""
       # ERA5+L instant values at 00 UTC
       sd:   "SD-M:ERA5+L:5109:1:0:1"
       rsn:  "SND-KGM3:ERA5+L:5109:1:0:1"
