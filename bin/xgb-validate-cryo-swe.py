@@ -36,7 +36,12 @@ base_dir='/home/ubuntu/data/cryoscope/snowmodel/'
 data_dir=f'{base_dir}validationdata/'                       # validation data
 mod_dir=f'{base_dir}models/'                                # trained models
 
-input_file=f'{data_dir}validation_all_scandi_alps_ext.csv.gz'
+# validation data written by the validation merge script (with tpi, dtw, dto, e, t500, t700, t850, as in training);
+# the merge script writes .csv, a gzipped copy works too: the newer of the two is used, so an old .csv.gz is never read by mistake
+input_name=f'{data_dir}validation_all_scandi_alps_ext'
+_cands=[f for f in (input_name+'.csv',input_name+'.csv.gz') if os.path.exists(f)]
+if not _cands: raise SystemExit(f'no validation file {input_name}.csv or .csv.gz')
+input_file=max(_cands,key=os.path.getmtime)
 # DEM files hold dist_to_train_m (distance of each validation point to nearest training point)
 dem_files={'Scandinavia':f'{data_dir}validation_dem+fch_merged_fin25_10000_fscs1_scandi.csv.gz',
            'Alps':f'{data_dir}validation_dem+fch_merged_fin2_10000_fscs1_alps.csv.gz'}
@@ -83,6 +88,7 @@ else:
     if unknown: raise SystemExit(f'no trained model for {unknown}; trained models: {avail}')
 if not tags: raise SystemExit('nothing to validate (every trained model already has a finished validation)')
 tlog(f'validating: {tags}')
+tlog(f'validation data: {input_file} (written {pd.Timestamp(os.path.getmtime(input_file),unit="s"):%Y-%m-%d %H:%M} UTC)')
 
 # ---------------------------------------------------------------
 # Load models; feature list (and order) comes from the model files
@@ -190,6 +196,12 @@ if dist:
     df=df.merge(dd,on=['latitude','longitude'],how='left')
     tlog(f"dist_to_train_m found for {df['dist_to_train_m'].notna().mean()*100:.1f} % of rows")
 
+# feature check: NaN fraction and fill codes (-9999) of every model feature, against the same features in training
+# (training does not replace -9999 either, so values are kept as they are; this only shows if something looks off)
+print('feature check (validation data):')
+for f in all_feats:
+    v=df[f]
+    print(f'  {f:<12} NaN {v.isna().mean():6.3f}   -9999 {int((v==-9999).sum()):8d}   min {v.min():12.4g}   max {v.max():12.4g}')
 f32=df.select_dtypes(include='float').columns.difference(['latitude','longitude'])
 df[f32]=df[f32].astype(np.float32)
 df=df.rename(columns={'SWE':'SWE_observed'})
