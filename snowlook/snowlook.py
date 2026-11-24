@@ -4,11 +4,11 @@
 #   Overview
 #   Final model:                Training and model performance, Independent validation   (only the final model, USED_MODEL, swe-ml-2)
 #   All model versions:         Training explorer, Validation explorer                   (every model edition)
-#   SWE predictions (past):     10 and 15 days (500 m), seasonal 215 days (2.8 km), seasonal 215 days (9 km)   (final model, divided by start date)
+#   SWE predictions (past):     15 days (500 m), seasonal 215 days (2.8 km), seasonal 215 days (9 km)   (final model, divided by start date)
 #   Compare model predictions:  10 and 15 days, seasonal                                  (every model edition)
 #   Latest SWE predictions:     web map with SmartMet WMS layers; click a spot for its ECXENS and ECXSF member time series
 # reads the outputs of the tuning script (models/, results/), the validation script (validationresults_<optuna_tag>/, one folder per model)
-# the 10 day ECXENS vs HKL forecast validation script (validation_ecens/<model>/<start date>/<prediction>/, copied from the forecast server)
+# the ECXENS (10 or 15 days) vs HKL forecast validation script (validation_ecens/<model>/<start date>/<prediction>/, copied from the forecast server)
 # and the seasonal ECXSF vs HKL validation script xgb-validate-swe-sf.py
 # (validation_sf/<model>/<start date>/<prediction>/ or validation_sf/<model>/<prediction>/, run_info.json in the folder above <prediction>/)
 # seasonal resolution (2.8 km or 9 km) of a run: 'resolution' or 'grid' in run_info.json (the validation script writes grid, e.g. 0.025°),
@@ -82,7 +82,7 @@ FC_ORDER=['ensmean','member01','wettest','driest']
 # region: 'region' in run_info.json, else a region suffix on the model folder (FIN5noclim_Alps, FIN5noclim_alps, FIN5noclim-Alps),
 #   else FC_DEFAULT_REGION; e.g. validation/FIN5noclim_Alps/20230210/ is model FIN5noclim, region Alps
 FC_LEGACY_MODEL='FINmulti'
-# simpler SWE predictions (past) 10 and 15 days page (final model): no 'scores per start date, chart' expander, and below the maps only
+# simpler SWE predictions (past) 15 days page (final model): no 'scores per start date, chart' expander, and below the maps only
 # Ensemble members (domain mean plots of every member) and Period summary; the compare page keeps everything
 FC_SIMPLE=True
 FC_DEFAULT_REGION='Scandinavia'
@@ -118,7 +118,7 @@ FC_METRICS={'bias':('bias (forecast minus HKL)','mm'),'mae':('MAE','mm'),'rmse':
 
 # start dates (cases) of the final model on the SWE predictions (past) pages: region -> {start date: (what the case tests, out of training seasons)}
 # out of training = True is marked with ★. Results for start dates not listed here still show up, without a description.
-# 10 / 15 day ECXENS starts, 00 UTC, 1 to 3 days before the event
+# ECXENS starts (15 days for swe-ml-2), 00 UTC, 1 to 3 days before the event
 FC_CASES={
     'Alps':{
         '2018-01-19':('level 5 snowfall, rain at lower elevations',False),
@@ -219,7 +219,7 @@ SF_CASE_SOURCES={
 def case_sources(table,region):
     if region=='Europe': return {f'source {r}':table.get(r,{}) for r in ('Scandinavia','Alps')}
     return {'source':table.get(region,{})}
-# predictions whose daily maps are collapsed (opened with a click) on the 10 / 15 day pages
+# predictions whose daily maps are collapsed (opened with a click) on the ECXENS (15 days, compare 10 and 15 days) pages
 FC_COLLAPSED={'wettest','driest'}
 
 # training locations figures in the snowmodel directory: area -> file name prefix; shown on the Training and Training explorer pages
@@ -239,8 +239,8 @@ EDITION_NAMES={'FINmulti':'FINmulti','MANYfeatures':'MANYfeatures','FIN2multiNoM
 OVERVIEW_INTRO=('The CryoSCOPE SWE model is an XGBoost trained machine learning model that estimates daily snow water equivalent (SWE) '
                 'from weather, terrain and land cover data, for two domains: the Alps and Fenno-Scandinavia. '
                 'Target "truth" in training is SWE from Snowcap ([snowcap.info](https://snowcap.info)), a daily 500 m product. '
-                'The end product is SWE forecasts, driven by ECMWF ensemble forecasts from 10 to 15 days (ECXENS) '
-                'up to a full season of 215 days (ECXSF).')
+                'The end product is SWE forecasts, driven by the 15 day ECMWF ensemble forecast (ECXENS) '
+                'and the seasonal forecast of 215 days (ECXSF).')
 # Overview page, under the text: one row of logos with their links under them (logo file, width in pixels, link, link text),
 # then the funding statement banner under the row; a missing logo file is skipped, its link is still shown
 OVERVIEW_LOGOS=[('cryo.png',260,'https://cryoscope-project.eu/','cryoscope-project.eu'),
@@ -249,6 +249,8 @@ OVERVIEW_LOGOS=[('cryo.png',260,'https://cryoscope-project.eu/','cryoscope-proje
 OVERVIEW_FUNDING=('cryoscope.png',760)
 # source code of the model, the prediction and validation scripts and this app; shown on the Overview page under the intro
 REPO_URL='https://github.com/fmidev/ml-cryoscope'
+# description of the ML workflow (training data, training, validation, prediction); shown on the Overview page under the code link
+WORKFLOW_URL='https://github.com/fmidev/ml-cryoscope/blob/main/README-SWE.md'
 # icon before the 'Code' link: GitHub's own mark as github.png (black, light theme) and github_white.png (dark theme)
 # in LOGO_DIR or next to the app (from github.com/logos); without the files a plain code icon is shown
 REPO_ICON='github.png'
@@ -267,11 +269,11 @@ OVERVIEW_SECTIONS=[
         ('Training explorer','training-explorer','every training iteration (model edition), with the editions compared side by side'),
         ('Validation explorer','validation-explorer','the same validation views for every iteration, and all iterations compared')]),
     ('SWE predictions (past)','final model against HKL (9 km: ERA5-Land), by start date','#2b8a9a',[
-        ('10 and 15 days (500 m)','prediction-10-15-days','ECXENS forecasts: the downscaled 10 or 15 day EC ensemble, daily'),
+        ('15 days (500 m)','prediction-15-days','ECXENS forecasts: the downscaled 15 day EC ensemble, daily'),
         ('Seasonal 215 days (2.8 km)','prediction-seasonal-2p8km','ECXSF monthly means: the downscaled EC seasonal forecast on the 2.8 km grid'),
         ('Seasonal 215 days (9 km)','prediction-seasonal-9km','ECXSF monthly means over Europe against ERA5-Land, with time series and scores per region')]),
     ('Compare model predictions','model editions side by side','#7a6a9e',[
-        ('10 and 15 days','compare-10-15-days','ECXENS of several model editions side by side, or any edition in detail'),
+        ('10 and 15 days','compare-10-15-days','ECXENS of several model editions side by side (older editions 10 days, swe-ml-2 15 days), or any edition in detail'),
         ('Seasonal','compare-seasonal','ECXSF of several model editions side by side (2.8 km, 9 km or both), or any edition in detail')]),
 ]
 # colours inherit the light or dark theme; only the thin accent bar and the hover tint carry the section colour
@@ -387,7 +389,7 @@ def path_input(label,value): return value if PUBLIC else st.text_input(label,val
 with (contextlib.nullcontext() if PUBLIC else st.sidebar.expander('data paths',expanded=False)):
     base=path_input('snowmodel directory',os.environ.get('SNOWMODEL_DIR','/home/ubuntu/data/cryoscope/snowmodel/'))
     optuna_db=path_input('optuna sqlite',os.environ.get('OPTUNA_DB','/home/ubuntu/data/ML/MLexperiments.sqlite3'))
-    PRED_DIR=path_input('10 day (ECXENS) validation directory',os.environ.get('SWE_PRED_DIR',os.path.join(base,'validation_ecens')))
+    PRED_DIR=path_input('ECXENS (15 days) validation directory',os.environ.get('SWE_PRED_DIR',os.path.join(base,'validation_ecens')))
     SF_DIR=path_input('seasonal 2.8 km (ECXSF) validation directory',os.environ.get('SWE_SF_DIR',os.path.join(base,'validation_sf')))
     # 9 km: validation_sf9km/ or, if only that one exists, validationresults_sf9km/
     _sf9=next((p for p in (os.path.join(base,d) for d in ('validation_sf9km','validationresults_sf9km')) if os.path.isdir(p)),os.path.join(base,'validation_sf9km'))
@@ -913,6 +915,7 @@ def page_overview():
     st.markdown('**CryoSCOPE snow water equivalent (SWE) ML model**')
     st.markdown(OVERVIEW_INTRO)
     if REPO_URL: st.markdown(repo_link_html(),unsafe_allow_html=True)
+    if WORKFLOW_URL: st.markdown(f'ML workflow description: [README-SWE.md]({WORKFLOW_URL})')
     st.markdown(overview_pages_html(),unsafe_allow_html=True)
     st.write('')
     # logos side by side, vertically centred in their row; the links in a row of their own, so they line up
@@ -1581,7 +1584,7 @@ def val_locations(tag):
         chart(fig)
 
 # ---------------------------------------------------------------
-# Pages: SWE predictions (past) 10 and 15 days (final model, divided by start date) and compare model predictions 10 and 15 days
+# Pages: SWE predictions (past) 15 days (final model, divided by start date) and compare model predictions 10 and 15 days
 # ECXENS forecasts validated against HKL, figures and scores from the forecast validation script
 # ---------------------------------------------------------------
 def fc_no_runs():
@@ -1601,7 +1604,7 @@ def fc_case_scores(r):
     return out
 
 def page_forecasts():
-    st.title('SWE predictions (past): 10 and 15 days (500 m, ECXENS)')
+    st.title('SWE predictions (past): 15 days (500 m, ECXENS)')
     allruns=fc_runs(PRED_DIR)
     model=used_model(prod_first({r['model'] for r in allruns})) or USED_MODEL
     runs=[r for r in allruns if r['model']==model]
@@ -1644,7 +1647,7 @@ def fc_detail_any(runs,region):
     fc_run_view(next(r for r in runs if r['run']==run_path),region,model)
 
 def fc_run_view(R,region,model,simple=False):
-    # simple: fewer score tabs below the daily maps (FC_SIMPLE on the SWE predictions (past) 10 and 15 days page)
+    # simple: fewer score tabs below the daily maps (FC_SIMPLE on the SWE predictions (past) 15 days page)
     # daily maps, scores, summaries, members and figures of one forecast run (one model, region and start date)
     run_path,preds,base_time=R['run'],R['preds'],R['base_time']
     df=fc_metrics(preds)
@@ -2771,7 +2774,7 @@ def page_compare_seasonal():
 
 # ---------------------------------------------------------------
 # Page: latest SWE predictions
-# web map with SmartMet WMS layers of the newest runs; click a spot (or pick one) and the ECXENS (10 / 15 days) and
+# web map with SmartMet WMS layers of the newest runs; click a spot (or pick one) and the ECXENS (15 days) and
 # ECXSF (215 days) member time series of that spot open below the map, with observed SWE of this snow season where set
 # point time series: SmartMet timeseries plugin, one request per product, every member as its own FMI key
 #   FMI key = param:producer:geometry:leveltype:level:forecasttype:forecastnumber, the member number is the last field
@@ -2785,14 +2788,14 @@ SNOW_MM=1.0                  # mm, a member has snow at or above this
 # the layer's domain (the run of the layer is read from a timeseries request there when GetCapabilities gives no reference_time).
 # The map asks the tiles itself in web mercator, so the BBOX of a test GetMap url does not matter here.
 LATEST_LAYERS={
-    'ECXENS SWE, Scandinavia (10 / 15 days, 500 m)':dict(layer='gui:isobands:SWE-Scandinavia',product='ecxens',probe=(67.367,26.629)),
-    # 'ECXENS SWE, Alps (10 / 15 days, 500 m)':dict(layer='gui:isobands:SWE-Alps',product='ecxens',probe=(46.830,9.809)),   # check the name
+    'ECXENS SWE, Scandinavia (15 days, 500 m)':dict(layer='gui:isobands:SWE-Scandinavia',product='ecxens',probe=(67.367,26.629)),
+    # 'ECXENS SWE, Alps (15 days, 500 m)':dict(layer='gui:isobands:SWE-Alps',product='ecxens',probe=(46.830,9.809)),   # check the name
 }
 # forecast products for the point time series: tmpl is the FMI key with {m} for the member number; members are sent one key each.
 # scale: factor to mm. ECXENS SD-M comes from the server already in mm SWE (despite the name), so 1
 # check forecasttype (the field before {m}) and the member numbers in grid-gui; ECXSF tmpl is empty until its geometry is known
 LATEST_PRODUCTS={
-    'ecxens':dict(name='ECXENS',title='10 / 15 day ensemble (ECXENS, 500 m)',tmpl='SD-M:ECXENS:5085:1:0:0:{m}',members=list(range(1,51)),
+    'ecxens':dict(name='ECXENS',title='15 day ensemble (ECXENS, 500 m)',tmpl='SD-M:ECXENS:5085:1:0:0:{m}',members=list(range(1,51)),
                   scale=1.0,days_back=1,days_ahead=16,extra='',color='#1f77b4'),
     'ecxsf':dict(name='ECXSF',title='seasonal ensemble (ECXSF, 215 days)',tmpl='',members=list(range(0,51)),
                  scale=1.0,days_back=1,days_ahead=216,extra='',color='#9467bd'),
@@ -3170,7 +3173,7 @@ def page_latest():
     for name,e in oerrs.items(): st.warning(f'{name} request failed: {e[:300]}')
     if not any(O.get('param') for O in LATEST_OBS.values()):
         st.caption('no observed SWE set yet (LATEST_OBS in the app)')
-    T=st.tabs(['10 / 15 days (ECXENS)','Season, 215 days (ECXSF)','Requests and data'])
+    T=st.tabs(['15 days (ECXENS)','Season, 215 days (ECXSF)','Requests and data'])
     with T[0]:
         latest_product_view('ecxens',res['ecxens'],obs,show)
     with T[1]:
@@ -3204,7 +3207,7 @@ NAV={'':[('Overview','Overview',page_overview,'overview')],
                     ('Independent validation','Independent validation',page_validation,'validation')],
      'All model versions':[('Training explorer','Training explorer',page_training_explorer,'training-explorer'),
                            ('Validation explorer','Validation explorer',page_validation_explorer,'validation-explorer')],
-     'SWE predictions (past)':[('SWE predictions (past): 10 and 15 days (500 m)','10 and 15 days (500 m)',page_forecasts,'prediction-10-15-days'),
+     'SWE predictions (past)':[('SWE predictions (past): 15 days (500 m)','15 days (500 m)',page_forecasts,'prediction-15-days'),
                                ('SWE predictions (past): seasonal 215 days (2.8 km)','seasonal 215 days (2.8 km)',page_seasonal_28,'prediction-seasonal-2p8km'),
                                ('SWE predictions (past): seasonal 215 days (9 km)','seasonal 215 days (9 km)',page_seasonal_9,'prediction-seasonal-9km')],
      'Compare model predictions':[('Compare model predictions: 10 and 15 days','10 and 15 days',page_compare,'compare-10-15-days'),

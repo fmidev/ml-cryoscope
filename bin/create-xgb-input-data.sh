@@ -8,8 +8,8 @@ cd /home/ubuntu/data/cryoscope/snowmodel/
 training_lonlats_file='snowcap_scandi_alps_training_lonlats.txt'
 validation_lonlats_file='snowcap_scandi_alps_validation_lonlats.txt'
 
-snowcap_input_training='training_inputs/HKL_swe_sde_scandi_alps_training.csv'
-snowcap_input_validation='validation_inputs/HKL_swe_sde_scandi_alps_validation.csv'
+snowcap_input_training='training_inputs/SNOWCAP_swe_sde_scandi_alps_training.csv'
+snowcap_input_validation='validation_inputs/SNOWCAP_swe_sde_scandi_alps_validation.csv'
 
 # fetch static data 
 
