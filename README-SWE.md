@@ -9,3 +9,4 @@ This document describes the workflow and requirements for combining Snowcap SWE 
 |Snow Water Equivalent|mm|Fenno-Scandinavia / Alps|500m|2015-2023 / 2016-2024|swe|
 |Snow depth|m|Fenno-Scandinavia / Alps|500m|2015-2023 / 2016-2024|sde|
 
+https://snowcap.info/ 
