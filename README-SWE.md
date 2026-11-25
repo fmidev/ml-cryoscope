@@ -31,8 +31,6 @@ Anni Kröger (2026), Finnish Meteorological Institute (FMI)
 
 https://snowcap.info/
 
-SNOWCAP (also called HKL in the scripts and file names) is a daily 500 m snow product. The Scandinavian SWE files are in m w.e. and are multiplied by 1000 to get mm. Negative SWE values are set to 0 before training.
-
 ## Workflow
 
 ```
