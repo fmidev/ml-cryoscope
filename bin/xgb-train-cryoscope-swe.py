@@ -37,6 +37,7 @@ OBJECTIVE='reg:tweedie'
 RMSE_TOL=0.05          # final trial: highest KGE on the Pareto front with RMSE at most 5 % above the front's best RMSE
 print('optuna version:',optuna.__version__)  # multi-objective TPE needs optuna >= 3.0
 DROP_LATLON=True       # latitude / longitude are read (per-location lag, duplicate check) but are no features
+DROP_TIME=True         # no day of year features (doy_sin, doy_cos): the model learns the season from the weather, not the calendar
 
 
 # Kling-Gupta efficiency: correlation, variability ratio and bias ratio in one score (1 = perfect)
@@ -100,10 +101,11 @@ df_input['SWE'] = df_input['SWE'].clip(lower=0.0)
 #df_input['swe_mean'] = df_input['swe_mean'].clip(lower=0.0) # just in case
 #df_input['swe_max'] = df_input['swe_max'].clip(lower=0.0)
 
-# add day of year cosine and sine as columns
+# day of year cosine and sine as columns, only when time features are used (DROP_TIME=False)
 df_input['utctime'] = pd.to_datetime(df_input['utctime'])
-df_input['doy_cos'] = np.cos(2 * np.pi * df_input['utctime'].dt.dayofyear / 365.25)
-df_input['doy_sin'] = np.sin(2 * np.pi * df_input['utctime'].dt.dayofyear / 365.25)
+if not DROP_TIME:
+    df_input['doy_cos'] = np.cos(2 * np.pi * df_input['utctime'].dt.dayofyear / 365.25)
+    df_input['doy_sin'] = np.sin(2 * np.pi * df_input['utctime'].dt.dayofyear / 365.25)
 
 # lag feature at the SAME location, computed on the continuous series BEFORE the snow-season split:
 #   sd_00_lag1: previous day's sd_00; NaN if that day is missing
@@ -140,9 +142,10 @@ predictors_drop=['utctime','tag','season']  # datetime, domain tag and season la
 if DROP_LATLON:
     predictors_drop+=['latitude','longitude']
 features=[c for c in df_input.columns if c not in target and c not in predictors_drop]
-print(str(len(features))+' features | split by snow season, valid:',valid_s)
+print(str(len(features))+' features | split by snow season, valid:',valid_s,'| time features:','no' if DROP_TIME else 'doy_sin, doy_cos')
 print('features:',features)
 assert not DROP_LATLON or not {'latitude','longitude'}&set(features), 'latitude / longitude still in features'
+assert not DROP_TIME or not {'doy_sin','doy_cos'}&set(features), 'doy_sin / doy_cos still in features'
 
 # Run only for both version (tag column holds 'Scandinavia' / 'Alps')
 domains=['both']
@@ -355,7 +358,7 @@ for domain in domains:
     hp_out=dict(trial.params)   # includes tweedie_variance_power
     hp_out.update({"objective":OBJECTIVE,"eval_metric":"rmse","tree_method":"hist",
                    "num_parallel_tree":1,"variant":variant,"domain":domain,"n_estimators_earlystop":best_iter,
-                   "n_features":len(features),"features":features,"drop_latlon":DROP_LATLON,
+                   "n_features":len(features),"features":features,"drop_latlon":DROP_LATLON,"drop_time":DROP_TIME,
                    "split_by":"snowseason","snow_start_month":SNOW_START_MONTH,
                    "train_seasons":train_seasons,"valid_seasons":valid_s,
                    "tuning":"multi-objective (min valid RMSE, max valid KGE)","rmse_tol":RMSE_TOL,

@@ -8,7 +8,9 @@
 #   Compare model predictions:  10 and 15 days, seasonal                                  (every model edition)
 #   Latest SWE predictions:     web map with SmartMet WMS layers; click a spot for its ECXENS and ECXSF member time series
 # reads the outputs of the tuning script (models/, results/), the validation script (validationresults_<optuna_tag>/, one folder per model)
-# the ECXENS (10 or 15 days) vs HKL forecast validation script (validation_ecens/<model>/<start date>/<prediction>/, copied from the forecast server)
+# the ECXENS (15 days) vs SNOWCAP forecast validation script cryo-ecxens-performance.py (ecxens_validation/<model>/<start date>/<prediction>/,
+#   files named <model>_<start date>_<prediction>_<kind>[_<valid date>].png, written on this server), and older ECXENS runs of the
+#   previous script (validation_ecens/<model>/<start date>/<prediction>/ with swe_metrics.csv, swe_compare_*.png, ...)
 # and the seasonal ECXSF vs HKL validation script xgb-validate-swe-sf.py
 # (validation_sf/<model>/<start date>/<prediction>/ or validation_sf/<model>/<prediction>/, run_info.json in the folder above <prediction>/)
 # seasonal resolution (2.8 km or 9 km) of a run: 'resolution' or 'grid' in run_info.json (the validation script writes grid, e.g. 0.025°),
@@ -108,6 +110,22 @@ def default_model(models,first=PROD_MODEL):
     ed=st.session_state.get('edition_keep')
     return ed if ed in models else models[0]
 FC_SKIP_DIRS={'app_cache','tmp','__pycache__'}   # folders under validation/ that are never models, start dates or predictions
+FC_NOT_PRED={'members','all'}   # run subfolders of cryo-ecxens-performance.py that hold plots over all members / predictions, not one prediction
+# file names: the new script writes <model>_<start date>_<prediction>_<kind>[_<valid date>].<ext>; old stem -> new kind.
+# fc_file() tries the new name first, then the old one, so both layouts work
+FC_NEW={'swe_metrics':'ecxens-metrics','pred_info':'info','swe_legend':'swe-legend',
+        'swe_map_ecens':'ecens-swe','swe_map_ecxens':'ecxens-swe','swe_map_hkl':'snowcap-swe',
+        'swe_bias':'ecxens-bias','swe_ecens_bias':'ecens-bias','swe_bias_gain':'ecxens-vs-ecens-gain',
+        'swe_density_scatter':'ecxens-density-scatter'}
+# run level files: old name -> (subfolder, new kind)
+FC_RUN_NEW={'run_info':('','run-info'),'member_ranking':('members','ranking'),
+            'swe_members_ecxens':('members','ecxens-timeseries'),'swe_members_ecens':('members','ecens-timeseries')}
+# period figures: shown name -> (new kinds, each its own png, old combined png)
+FC_PERIOD_FIGS={'mean bias and RMSE maps':(['ecxens-mean-bias','ecxens-rmse'],'swe_bias_mean_rmse.png'),
+                'ECENS bias and MAE change vs ECENS':(['ecens-mean-bias','ecxens-vs-ecens-mae-gain'],'swe_ecens_bias_gain_mean.png'),
+                'pixel density, all days pooled':(['ecxens-density-scatter'],'swe_density_scatter.png'),
+                'scores per lead day':(['ecxens-score-bias-mae','ecxens-score-rmse','ecxens-score-kge','ecxens-score-csi',
+                                        'ecxens-score-pod-far','ecxens-score-volume','ecxens-vs-ecens-skill'],'swe_scores_vs_lead.png')}
 # names shown when a folder has no pred_info.json; member1, member01, ... are named 'ECXENS member N' automatically
 FC_NAMES={'ensmean':'ECXENS ens mean','wettest':'ECXENS wettest member','driest':'ECXENS driest member'}
 MILD_BIAS=50   # mm, same as MILD_BIAS in the forecast validation script (soft bias colours up to this, strong beyond)
@@ -233,7 +251,7 @@ VAL_LOC_FIGS={'Scandinavia':'validation_dem+fch_merged_fin25_10000_fscs1_scandi_
               'Alps':'validation_dem+fch_merged_fin2_10000_fscs1_alps_map.png'}
 
 # model editions = optuna_tag of the training run -> name shown in the app; unknown tags are shown as they are
-EDITION_NAMES={'FINmulti':'FINmulti','MANYfeatures':'MANYfeatures','FIN2multiNoMax':'FIN2multiNoMax','FIN5noclim':'FIN5noclim','SnowWaterEq':'SnowWaterEq','swe-ml-2':'swe-ml-2 (final model)'}
+EDITION_NAMES={'FINmulti':'FINmulti','MANYfeatures':'MANYfeatures','FIN2multiNoMax':'FIN2multiNoMax','FIN5noclim':'FIN5noclim','SnowWaterEq':'SnowWaterEq','swe-ml-2':'swe-ml-2 (final model)','swe-ml-3':'swe-ml-3 (no time features)'}
 
 # Overview page text: what the SWE ML work is and how the pages fit together; edit freely (markdown)
 OVERVIEW_INTRO=('The CryoSCOPE SWE model is an XGBoost trained machine learning model that estimates daily snow water equivalent (SWE) '
@@ -247,6 +265,9 @@ OVERVIEW_LOGOS=[('cryo.png',260,'https://cryoscope-project.eu/','cryoscope-proje
                 ('snowcap.png',120,'https://snowcap.info','snowcap.info'),
                 ('fmi.png',300,'https://trafficability.xyz','trafficability.xyz')]
 OVERVIEW_FUNDING=('cryoscope.png',760)
+# SnowLook eye above the title of the Overview page: the app icon (eye with a snowflake, no text) and its width in pixels
+OVERVIEW_ICON='snowlook_icon.png'
+OVERVIEW_ICON_PX=120
 # source code of the model, the prediction and validation scripts and this app; shown on the Overview page under the intro
 REPO_URL='https://github.com/fmidev/ml-cryoscope'
 # description of the ML workflow (training data, training, validation, prediction); shown on the Overview page under the code link
@@ -315,6 +336,9 @@ FEATURE_INFO={
     'height':('terrain','elevation','m'),
     'slope':('terrain','terrain slope','°'),
     'aspect':('terrain','terrain aspect','°'),
+    'tpi':('terrain','topographic position index','m'),
+    'dtw':('terrain','distance to water','m'),
+    'dto':('terrain','distance to ocean','m'),
     'tcf':('land cover','tree cover fraction','0..1'),
     'laihv':('land cover','leaf area index, high vegetation','m² m⁻²'),
     'lailv':('land cover','leaf area index, low vegetation','m² m⁻²'),
@@ -389,7 +413,9 @@ def path_input(label,value): return value if PUBLIC else st.text_input(label,val
 with (contextlib.nullcontext() if PUBLIC else st.sidebar.expander('data paths',expanded=False)):
     base=path_input('snowmodel directory',os.environ.get('SNOWMODEL_DIR','/home/ubuntu/data/cryoscope/snowmodel/'))
     optuna_db=path_input('optuna sqlite',os.environ.get('OPTUNA_DB','/home/ubuntu/data/ML/MLexperiments.sqlite3'))
-    PRED_DIR=path_input('ECXENS (15 days) validation directory',os.environ.get('SWE_PRED_DIR',os.path.join(base,'validation_ecens')))
+    PRED_DIR=path_input('ECXENS (15 days) validation directory',os.environ.get('SWE_PRED_DIR',os.path.join(base,'ecxens_validation')))
+    # older ECXENS results of the previous validation script (other file names), shown together with the new ones
+    PRED_DIR_OLD=path_input('older ECXENS validation directory',os.environ.get('SWE_PRED_DIR_OLD',os.path.join(base,'validation_ecens')))
     SF_DIR=path_input('seasonal 2.8 km (ECXSF) validation directory',os.environ.get('SWE_SF_DIR',os.path.join(base,'validation_sf')))
     # 9 km: validation_sf9km/ or, if only that one exists, validationresults_sf9km/
     _sf9=next((p for p in (os.path.join(base,d) for d in ('validation_sf9km','validationresults_sf9km')) if os.path.isdir(p)),os.path.join(base,'validation_sf9km'))
@@ -647,10 +673,57 @@ def nearest(lt,lat,lon):
     r=lt.loc[d.idxmin()]
     return float(r['latitude']),float(r['longitude'])
 
+def fc_role(p):
+    # role of a prediction folder: 'driest-member17' -> 'driest', 'wettest-member42' -> 'wettest', others as they are
+    lab=os.path.basename(str(p).rstrip('/'))
+    for r in ('driest','wettest'):
+        if lab==r or lab.startswith(r+'-member'): return r
+    return lab
+
 def fc_sort_key(p):
     # prediction folders in FC_ORDER first (ensmean, member01, wettest, driest), any others after them by name
-    lab=os.path.basename(p.rstrip('/'))
-    return (FC_ORDER.index(lab) if lab in FC_ORDER else len(FC_ORDER),lab)
+    lab=fc_role(p)
+    return (FC_ORDER.index(lab) if lab in FC_ORDER else len(FC_ORDER),os.path.basename(str(p).rstrip('/')))
+
+def fc_file(p,stem,day=None,ext='png'):
+    # file of a prediction folder: new name <model>_<start>_<pred>_<kind>[_<day>].<ext> if there is one, else the old <stem>[_<day>].<ext>
+    sfx=(f'_{day}' if day else '')+f'.{ext}'
+    kind=FC_NEW.get(stem)
+    if kind:
+        hits=sorted(glob.glob(os.path.join(glob.escape(p),f'*_{kind}{sfx}')))
+        if hits: return hits[0]
+    return os.path.join(p,f'{stem}{sfx}')
+
+def fc_kind_file(p,kind,ext='png'):
+    # new layout file of one kind without a date, None when there is none
+    hits=sorted(glob.glob(os.path.join(glob.escape(p),f'*_{kind}.{ext}')))
+    return hits[0] if hits else None
+
+def fc_run_file(run,stem,ext):
+    # run level file: new name (run-info in the run folder, member files in members/) if there is one, else the old name
+    sub,kind=FC_RUN_NEW[stem]
+    d=os.path.join(run,sub) if sub else run
+    hits=sorted(glob.glob(os.path.join(glob.escape(d),f'*_{kind}.{ext}')))
+    return hits[0] if hits else os.path.join(run,f'{stem}.{ext}')
+
+def fc_new_layout(p):
+    # prediction folder written by cryo-ecxens-performance.py (single maps with the long names)
+    return bool(glob.glob(os.path.join(glob.escape(p),'*_ecxens-swe_*.png')))
+
+def fc_is_pred(d):
+    # a prediction folder has scores (old or new name) or, without SNOWCAP for the start date, at least the ECXENS maps
+    return os.path.exists(fc_file(d,'swe_metrics',ext='csv')) or fc_new_layout(d)
+
+def fc_days(p):
+    # valid days (YYYYMMDD) with maps in a prediction folder
+    new={os.path.basename(f)[-12:-4] for f in glob.glob(os.path.join(glob.escape(p),'*_ecxens-swe_*.png'))}
+    return new or {os.path.basename(f)[len('swe_compare_'):-4] for f in glob.glob(os.path.join(glob.escape(p),'swe_compare_*.png'))}
+
+def fc_read_metrics(p):
+    # daily scores of one prediction folder; new column names (vol_snowcap_km3, ...) renamed to the old ones the pages use
+    d=read_csv(fc_file(p,'swe_metrics',ext='csv'))
+    if d is None: return None
+    return d.rename(columns={c:c.replace('snowcap','hkl') for c in d.columns if 'snowcap' in c})
 
 def fc_subdirs(p):
     try:
@@ -659,8 +732,8 @@ def fc_subdirs(p):
         return []
 
 def fc_pred_dirs(p):
-    # prediction folders directly under p (those with swe_metrics.csv), in FC_ORDER
-    return sorted((os.path.join(p,d) for d in fc_subdirs(p) if os.path.exists(os.path.join(p,d,'swe_metrics.csv'))),key=fc_sort_key)
+    # prediction folders directly under p (scores or ECXENS maps in them), in FC_ORDER
+    return sorted((os.path.join(p,d) for d in fc_subdirs(p) if d not in FC_NOT_PRED and fc_is_pred(os.path.join(p,d))),key=fc_sort_key)
 
 def fc_date_from_name(name):
     for f in ('%Y%m%d','%Y%m%dT%H%M%S','%Y%m%d%H','%Y-%m-%d','%Y%m'):   # %Y%m: seasonal folders like 202601
@@ -671,7 +744,7 @@ def fc_date_from_name(name):
 def fc_base_from_scores(pred):
     # most common (date minus lead day) in one prediction's scores
     try:
-        d=pd.read_csv(os.path.join(pred,'swe_metrics.csv'),usecols=['date','lead_day'])
+        d=pd.read_csv(fc_file(pred,'swe_metrics',ext='csv'),usecols=['date','lead_day'])
         m=(pd.to_datetime(d['date'])-pd.to_timedelta(d['lead_day'],unit='D')).mode()
         return m.iloc[0] if len(m) else None
     except Exception:
@@ -718,7 +791,7 @@ def fc_runs(pdir,known=()):
     for run,mfolder in found:
         model,region=fc_split_model(mfolder)
         preds=fc_pred_dirs(run)
-        info=read_json(os.path.join(run,'run_info.json'))
+        info=read_json(fc_run_file(run,'run_info','json'))
         bt=None
         if info.get('base_time'):
             try: bt=pd.Timestamp(info['base_time'])
@@ -730,8 +803,23 @@ def fc_runs(pdir,known=()):
     # start dates in CASE_HIDE are left out here, so they are in no table, chart or menu of any page
     out=[r for r in out if r['base_time'] is None or not case_hidden(f"{r['base_time']:%Y-%m-%d}")]
     return sorted(out,key=lambda r:r['base_time'] if r['base_time'] is not None else pd.Timestamp('1900-01-01'),reverse=True)
+def fc_all_runs():
+    # runs of the new folder (PRED_DIR) and of the older one (PRED_DIR_OLD); a run with the same model, region and start date in both
+    # is taken from the new folder. Newest start date first
+    out=fc_runs(PRED_DIR)
+    if os.path.normpath(PRED_DIR_OLD)!=os.path.normpath(PRED_DIR):
+        have={(r['model'],r['region'],r['base_time']) for r in out}
+        out=out+[r for r in fc_runs(PRED_DIR_OLD) if (r['model'],r['region'],r['base_time']) not in have]
+    return sorted(out,key=lambda r:r['base_time'] if r['base_time'] is not None else pd.Timestamp('1900-01-01'),reverse=True)
+
 def fc_rel(run):
-    return os.path.relpath(run,PRED_DIR) if os.path.normpath(run)!=os.path.normpath(PRED_DIR) else os.path.basename(PRED_DIR.rstrip('/'))
+    # run folder relative to the validation folder it is in
+    rn=os.path.normpath(run)
+    for root in (PRED_DIR,PRED_DIR_OLD):
+        root=os.path.normpath(root)
+        if rn==root: return os.path.basename(root)
+        if rn.startswith(root+os.sep): return os.path.relpath(rn,root)
+    return run
 
 def fc_run_label(r):
     bt=r['base_time']
@@ -741,10 +829,10 @@ def fc_run_label(r):
 def fc_name(pred_dir):
     # shown name: pred_info.json written by the validation script (e.g. 'ECXENS member 23 (wettest)'),
     # then FC_NAMES, then member<N> (member1, member01, ...) -> 'ECXENS member N'
-    name=read_json(os.path.join(pred_dir,'pred_info.json')).get('name')
+    name=read_json(fc_file(pred_dir,'pred_info',ext='json')).get('name')
     if name: return name
     lab=os.path.basename(pred_dir.rstrip('/'))
-    if lab in FC_NAMES: return FC_NAMES[lab]
+    if fc_role(lab) in FC_NAMES: return FC_NAMES[fc_role(lab)]
     if lab.startswith('member') and lab[6:].isdigit(): return f'ECXENS member {int(lab[6:])}'
     return lab
 
@@ -752,7 +840,7 @@ def fc_metrics(preds):
     # daily scores of every prediction in the run, with 'pred' (folder) and 'name' (shown) columns
     parts=[]
     for p in preds:
-        d=read_csv(os.path.join(p,'swe_metrics.csv'))
+        d=fc_read_metrics(p)
         if d is not None: parts.append(d.assign(pred=os.path.basename(p),name=fc_name(p)))
     if not parts: return None
     df=pd.concat(parts,ignore_index=True)
@@ -911,6 +999,8 @@ def page_overview():
     global SHOW_FOOTER
     SHOW_FOOTER=False
     if SNOWFALL: st.markdown(snowfall_html(),unsafe_allow_html=True)
+    # SnowLook eye (the app icon, no text) above the title
+    if logo(OVERVIEW_ICON): st.image(logo(OVERVIEW_ICON),width=OVERVIEW_ICON_PX)
     st.title(APP_NAME)
     st.markdown('**CryoSCOPE snow water equivalent (SWE) ML model**')
     st.markdown(OVERVIEW_INTRO)
@@ -1588,15 +1678,15 @@ def val_locations(tag):
 # ECXENS forecasts validated against HKL, figures and scores from the forecast validation script
 # ---------------------------------------------------------------
 def fc_no_runs():
-    st.markdown('Copy the output of the forecast validation script here as `<model>/<start date>/<prediction>/`, '
-                'for example `FIN5/20180119/ensmean/` (Alps: `FIN5_Alps/20180119/ensmean/`) with `swe_metrics.csv` '
-                'and the png figures in each prediction folder:')
-    st.code(f'rsync -av smartmet@smart.nsdc.fmi.fi:/home/users/smartmet/data/ec-ens/validation/figs_swe_validation/ {PRED_DIR}/',language='bash')
+    st.markdown(f'Run the forecast validation script, it writes straight into `{PRED_DIR}` as `<model>/<start date>/<prediction>/`, '
+                'for example `swe-ml-2/20261121/ensmean/`:')
+    st.code('python cryo-ecxens-performance.py 20261121 swe-ml-2',language='bash')
+    st.caption(f'Older results of the previous script are read from {PRED_DIR_OLD}.')
 
 def fc_case_scores(r):
     # mean scores over all lead days of the ens mean (or the first prediction) of one run, for the start date table
     p=next((p for p in r['preds'] if os.path.basename(p)=='ensmean'),r['preds'][0])
-    d=read_csv(os.path.join(p,'swe_metrics.csv'))
+    d=fc_read_metrics(p)
     if d is None: return {}
     out={}
     for k,l in [('bias','bias (mm)'),('rmse','RMSE (mm)'),('kge','KGE'),('csi_1','CSI 1 mm'),('skill_mse_vs_ecens','MSE skill vs ECENS')]:
@@ -1605,7 +1695,7 @@ def fc_case_scores(r):
 
 def page_forecasts():
     st.title('SWE predictions (past): 15 days (500 m, ECXENS)')
-    allruns=fc_runs(PRED_DIR)
+    allruns=fc_all_runs()
     model=used_model(prod_first({r['model'] for r in allruns})) or USED_MODEL
     runs=[r for r in allruns if r['model']==model]
     region,runs=region_choice(runs,FC_CASES,'fc_region_sel')
@@ -1652,20 +1742,20 @@ def fc_run_view(R,region,model,simple=False):
     run_path,preds,base_time=R['run'],R['preds'],R['base_time']
     df=fc_metrics(preds)
     if df is None:
-        st.warning('no readable swe_metrics.csv in this run'); return
+        st.info('No scores for this start date (no SNOWCAP SWE for its days yet): forecast maps and ensemble members only.')
     names=[fc_name(p) for p in preds]
     # the folder's start date and the dates inside swe_metrics.csv must agree, otherwise the folder holds another run's results
     bt_scores=fc_base_from_scores(preds[0])
-    if base_time is not None and bt_scores is not None and abs((bt_scores-base_time).days)>0:
+    if df is not None and base_time is not None and bt_scores is not None and abs((bt_scores-base_time).days)>0:
         st.warning(f"`{fc_rel(run_path)}` says start date {base_time:%Y-%m-%d}, but its swe_metrics.csv has dates "
                    f"{df['date'].min():%Y-%m-%d} to {df['date'].max():%Y-%m-%d} (start {bt_scores:%Y-%m-%d}): "
                    "these files come from another forecast run, check what was copied into this folder")
 
     # ---- daily maps first: per prediction raw ECENS, ECXENS, HKL (one figure) and ECXENS minus HKL
     st.subheader('Daily maps')
-    dates=sorted({os.path.basename(f)[len('swe_compare_'):-4] for p in preds for f in glob.glob(os.path.join(p,'swe_compare_*.png'))})
+    dates=sorted({d for p in preds for d in fc_days(p)})
     if not dates:
-        st.info('no swe_compare_YYYYMMDD.png figures in this run')
+        st.info('no daily map figures in this run')
     else:
         lab=lambda t: f"{pd.Timestamp(t):%Y-%m-%d}"+(f" (lead {(pd.Timestamp(t)-base_time).days} d)" if base_time is not None else '')
         c1,c2=st.columns([3,2])
@@ -1680,11 +1770,11 @@ def fc_run_view(R,region,model,simple=False):
         ts=pd.Timestamp(day)
         for p in show:
             # wettest and driest members collapsed: their maps open with a click
-            collapsed=os.path.basename(p) in FC_COLLAPSED
+            collapsed=fc_role(p) in FC_COLLAPSED
             box=st.expander(fc_name(p),expanded=False) if collapsed else st.container()
             with box:
                 if not collapsed: st.markdown(f'#### {fc_name(p)}')
-                r=df[(df['pred']==os.path.basename(p))&(df['date']==ts)]
+                r=df[(df['pred']==os.path.basename(p))&(df['date']==ts)] if df is not None else pd.DataFrame()
                 if not r.empty:
                     r=r.iloc[0]
                     parts=[('bias',r.get('bias'),'{:+.1f} mm'),('RMSE',r.get('rmse'),'{:.1f} mm'),('KGE',r.get('kge'),'{:.3f}'),
@@ -1695,6 +1785,14 @@ def fc_run_view(R,region,model,simple=False):
                         parts+=[('0.1° RMSE ECENS',r.get('ecens_rmse'),'{:.1f} mm'),('ECXENS',r.get('ecx01_rmse'),'{:.1f} mm'),
                                 ('MSE skill vs ECENS',r.get('skill_mse_vs_ecens'),'{:+.2f}'),('cells improved',r.get('frac_cells_improved'),'{:.0%}')]
                     st.markdown(' | '.join(f'{k} **{fmt(v,f)}**' for k,v,f in parts))
+                if fc_new_layout(p):
+                    # new layout: raw ECENS, ECXENS and SNOWCAP single maps in one row (same size and area), the SWE legend,
+                    # then the bias maps of the day (only on days with SNOWCAP)
+                    img_row([(fc_file(p,k,day),None) for k in ('swe_map_ecens','swe_map_ecxens','swe_map_hkl')])
+                    lg=fc_file(p,'swe_legend')
+                    if os.path.exists(lg): st.image(lg,width=900)
+                    img_row([(fc_file(p,k,day),None) for k in ('swe_bias','swe_ecens_bias','swe_bias_gain')])
+                    continue
                 # widths follow the png aspect ratios, so all images in the row get the same height
                 row=[os.path.join(p,f'swe_compare_{day}.png'),os.path.join(p,f'swe_bias_{day}.png')]
                 # ECENS bias and bias size change; runs from before that have the ECXENS minus ECENS map or nothing
@@ -1713,6 +1811,11 @@ def fc_run_view(R,region,model,simple=False):
 
     # ---- everything else below the maps
     st.divider()
+    if df is None:
+        # no scores: only the domain mean plots of every member
+        st.subheader('Ensemble members')
+        fc_member_ts(run_path,base_time)
+        return
     st.subheader('Scores and summaries')
     # simple (the final model page): ensemble members first with only the domain mean plots, then the period summary
     names=(['Ensemble members','Period summary'] if simple else
@@ -1790,21 +1893,21 @@ def fc_run_view(R,region,model,simple=False):
                 summ.append(row)
             st.markdown('**Means over all lead days**')
             table(pd.DataFrame(summ).round(3),hide_index=True)
-            figs={'swe_bias_mean_rmse.png':'mean bias and RMSE maps','swe_ecens_bias_gain_mean.png':'ECENS bias and MAE change vs ECENS',
-                  'swe_density_scatter.png':'pixel density, all days pooled','swe_scores_vs_lead.png':'scores per lead day'}
-            kind=st.radio('figure',list(figs),horizontal=True,format_func=figs.get,key='fc_period_fig')
+            kind=st.radio('figure',list(FC_PERIOD_FIGS),horizontal=True,key='fc_period_fig')
+            kinds,old=FC_PERIOD_FIGS[kind]
             cols=st.columns(2)
             for i,p in enumerate(preds):
                 with cols[i%2]:
                     st.markdown(f'**{fc_name(p)}**')
-                    img(os.path.join(p,kind))
+                    files=[f for f in (fc_kind_file(p,k) for k in kinds) if f]   # new layout: each figure its own png
+                    for f in files or [os.path.join(p,old)]: img(f)
 
     if 'Ensemble members' in T:
         with T['Ensemble members']:
             if simple:
                 fc_member_ts(run_path,base_time)   # only the domain mean plots of every member
             else:
-                rk=read_csv(os.path.join(run_path,'member_ranking.csv'))
+                rk=read_csv(fc_run_file(run_path,'member_ranking','csv'))
                 if rk is None:
                     st.info('no member_ranking.csv in this run (written by the validation script when ADD_EXTREME_MEMBERS = True)')
                 else:
@@ -1859,11 +1962,12 @@ def fc_run_view(R,region,model,simple=False):
 def fc_member_ts(run_path,base_time):
     # figures of the validation script (MEMBER_TIMESERIES = True): domain mean SWE per day of every ECXENS / ECENS member and HKL
     st.markdown('**Domain mean SWE of every member against HKL**')
-    pngs=[(os.path.join(run_path,'swe_members_ecxens.png'),'ECXENS members'),(os.path.join(run_path,'swe_members_ecens.png'),'raw ECENS members')]
+    pngs=[(fc_run_file(run_path,'swe_members_ecxens','png'),'ECXENS members'),(fc_run_file(run_path,'swe_members_ecens','png'),'raw ECENS members')]
     if any(os.path.exists(p) for p,_ in pngs): img_row(pngs)
     else: st.info('no swe_members_ecxens.png / swe_members_ecens.png in this run (written by the validation script when MEMBER_TIMESERIES = True)')
 
 def fc_pred_label(lab):
+    lab=fc_role(lab)
     if lab in FC_NAMES: return FC_NAMES[lab].replace('ECXENS ','')
     if lab.startswith('member') and lab[6:].isdigit(): return f'member {int(lab[6:])}'
     return lab
@@ -1875,7 +1979,7 @@ CMP_VIEWS=['Models side by side','One model in detail']
 
 def page_compare():
     st.title('Compare model predictions: 10 and 15 days (500 m, ECXENS)')
-    runs=fc_runs(PRED_DIR)
+    runs=fc_all_runs()
     if not runs:
         st.warning(f'no forecast validation results in {PRED_DIR}'); fc_no_runs(); return
     view=st.radio('view',CMP_VIEWS,horizontal=True,key='cmpm_view')
@@ -1897,22 +2001,23 @@ def page_compare():
     pick=c2.multiselect('models',models,default=models,format_func=edition_name,key=f'cmpm_models_{key}')
     if not pick:
         st.info('pick at least one model'); return
+    # predictions matched by role, so driest-member17 of one model and driest of another are both 'driest'
     common=None
     for m in pick:
-        labs={os.path.basename(p) for p in by_model[m]['preds']}
+        labs={fc_role(p) for p in by_model[m]['preds']}
         common=labs if common is None else common&labs
     if not common:
         st.warning('the picked models have no prediction in common for this start date'); return
     labs=sorted(common,key=fc_sort_key)
     pred=c3.selectbox('prediction',labs,format_func=fc_pred_label,key=f'cmpm_pred_{key}')
-    pdir={m:os.path.join(by_model[m]['run'],pred) for m in pick}
+    pdir={m:next(p for p in by_model[m]['preds'] if fc_role(p)==pred) for m in pick}
     if pred in ('driest','wettest'):
         st.caption(f'{pred} is ranked separately for each model, so the member can differ: '+
                    ', '.join(f'{edition_name(m)}: {fc_name(pdir[m])}' for m in pick))
 
     dates=None
     for m in pick:
-        d={os.path.basename(f)[len('swe_compare_'):-4] for f in glob.glob(os.path.join(pdir[m],'swe_compare_*.png'))}
+        d=fc_days(pdir[m])
         dates=d if dates is None else dates&d
     dates=sorted(dates or [])
     if not dates:
@@ -1924,9 +2029,10 @@ def page_compare():
     ref=pdir[pick[0]]   # raw ECENS and HKL are the same in every model folder, taken from the first model
 
     # ---- maps: raw ECENS, ECXENS per model, HKL
-    panels=[(os.path.join(ref,f'swe_map_ecens_{day}.png'),'raw ECENS (0.1°)')]
-    panels+=[(os.path.join(pdir[m],f'swe_map_ecxens_{day}.png'),f'ECXENS {edition_name(m)}') for m in pick]
-    panels+=[(os.path.join(ref,f'swe_map_hkl_{day}.png'),'HKL (Snowcap)')]
+    panels=[(fc_file(ref,'swe_map_ecens',day),'raw ECENS (0.1°)')]
+    panels+=[(fc_file(pdir[m],'swe_map_ecxens',day),f'ECXENS {edition_name(m)}') for m in pick]
+    hp=fc_file(ref,'swe_map_hkl',day)
+    if os.path.exists(hp) or not fc_new_layout(ref): panels+=[(hp,'HKL (Snowcap)')]   # new runs without SNOWCAP: no SNOWCAP map
     if all(os.path.exists(p) for p,_ in panels):
         ncol=c2.number_input('maps per row',min_value=2,max_value=8,value=min(len(panels),5),step=1,key='cmpm_ncol')
         for i in range(0,len(panels),int(ncol)):
@@ -1934,8 +2040,8 @@ def page_compare():
             for col,(p,cap) in zip(st.columns(int(ncol)),row):
                 with col:
                     st.markdown(f'**{cap}**'); img(p)
-        if os.path.exists(os.path.join(ref,'swe_legend.png')):
-            st.image(os.path.join(ref,'swe_legend.png'),width=900)
+        if os.path.exists(fc_file(ref,'swe_legend')):
+            st.image(fc_file(ref,'swe_legend'),width=900)
     else:
         # runs without single panels: each model's own figures side by side, one column per model
         st.caption('Each model\'s own figures side by side (raw ECENS | ECXENS | HKL, then ECXENS minus HKL). '
@@ -1947,8 +2053,8 @@ def page_compare():
 
     # ---- bias maps of the same day
     with st.expander('bias maps for this day (forecast minus HKL)',expanded=False):
-        bpan=[(os.path.join(ref,f'swe_ecens_bias_{day}.png'),'raw ECENS minus HKL (0.1°)')]
-        bpan+=[(os.path.join(pdir[m],f'swe_bias_{day}.png'),f'ECXENS {edition_name(m)} minus HKL') for m in pick]
+        bpan=[(fc_file(ref,'swe_ecens_bias',day),'raw ECENS minus HKL (0.1°)')]
+        bpan+=[(fc_file(pdir[m],'swe_bias',day),f'ECXENS {edition_name(m)} minus HKL') for m in pick]
         bpan=[(p,c) for p,c in bpan if os.path.exists(p)]
         for i in range(0,len(bpan),4):
             for col,(p,cap) in zip(st.columns(4),bpan[i:i+4]):
@@ -1958,7 +2064,7 @@ def page_compare():
     # ---- scores of this day and over all lead days, model against model
     parts=[]
     for m in pick:
-        d=read_csv(os.path.join(pdir[m],'swe_metrics.csv'))
+        d=fc_read_metrics(pdir[m])
         if d is not None: parts.append(d.assign(model=edition_name(m)))
     if not parts: return
     df=pd.concat(parts,ignore_index=True); df['date']=pd.to_datetime(df['date'])
@@ -1996,8 +2102,8 @@ def page_compare():
         rows=[]
         for r in runs:
             if r['model'] not in pick: continue
-            p=os.path.join(r['run'],pred)
-            d=read_csv(os.path.join(p,'swe_metrics.csv'))
+            p=next((x for x in r['preds'] if fc_role(x)==pred),None)
+            d=fc_read_metrics(p) if p else None
             if d is None or met not in d: continue
             rows.append({'start date':fc_date_key(r),'model':edition_name(r['model']),FC_METRICS[met][0]:d[met].mean()})
         if rows:
