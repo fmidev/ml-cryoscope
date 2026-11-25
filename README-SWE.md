@@ -4,9 +4,7 @@ This document describes the workflow and requirements for combining Snowcap SWE 
 
 The trained model downscales and corrects ECMWF forecasts to daily 500 m SWE: the 15 day ensemble (ECXENS) and the seasonal forecast of 215 days (ECXSF). Results are shown in the SnowLook dashboard ([snowlook.cryo-scope.eu](https://snowlook.cryo-scope.eu)).
 
-Work done in the [CryoSCOPE](https://cryoscope-project.eu/) project.
-
-Anni Kröger 2026 Finnish Meteorological Institute (FMI)
+Work done in the [CryoSCOPE](https://cryoscope-project.eu/) project at the Finnish Meteorological Institute (FMI).
 
 ## Contents
 
@@ -27,10 +25,12 @@ Anni Kröger 2026 Finnish Meteorological Institute (FMI)
 
 |target in ML|units|spatial coverage|spatial resolution|temporal coverage|xgb name|
 |:-|:-|:-|:-|:-|:-|
-|Snow Water Equivalent|mm|Fenno-Scandinavia / Alps|500m|daily 2015-2023 / 2016-2024|swe|
-|Snow depth|m|Fenno-Scandinavia / Alps|500m|daily 2015-2023 / 2016-2024|sde|
+|Snow Water Equivalent|mm|Fenno-Scandinavia / Alps|500m|2015-2023 / 2016-2024|swe|
+|Snow depth|m|Fenno-Scandinavia / Alps|500m|2015-2023 / 2016-2024|sde|
 
 https://snowcap.info/
+
+SNOWCAP (also called HKL in the scripts and file names) is a daily 500 m snow product. The Scandinavian SWE files are in m w.e. and are multiplied by 1000 to get mm. Negative SWE values are set to 0 before training.
 
 ## Workflow
 
@@ -52,6 +52,8 @@ https://snowcap.info/
 |Fenno-Scandinavia|Norway, Sweden, Finland|2015-09-01 to 2023-09-01|
 |Alps|the six Alpine countries|2016-09-01 to 2024-09-01|
 
+The two domains are trained together as one model (`both`); a `tag` column tells them apart in the data.
+
 Training and validation locations are chosen with feature space coverage sampling (FSCS), so that the locations cover the range of terrain and forest in each domain.
 
 TODO: describe the FSCS inputs (elevation, slope, aspect, forest canopy height 2021) and settings.
@@ -70,10 +72,6 @@ References for the method: Brus (2019), Ma et al. (2020), Minasny & McBratney (2
 
 ![distributions](figs/dem+fch_merged_fch25_hist.png)
 
-Validation locations:
-
-![validation locations, Scandinavia](figs/validation_dem+fch_merged_fin25_10000_fscs1_scandi_map.png)
-
 ### Alps
 
 |elevation|slope|aspect|forest canopy height 2021|
@@ -82,9 +80,11 @@ Validation locations:
 
 ![distributions](figs/dem+fch_merged_alps_fch2_hist.png)
 
-Validation locations:
+### Validation locations
 
-![validation locations, Alps](figs/validation_dem+fch_merged_fin2_10000_fscs1_alps_map.png)
+|Fenno-Scandinavia|Alps|
+|:-:|:-:|
+|<img src="figs/validation_dem+fch_merged_fin25_10000_fscs1_scandi_map.png" alt="validation locations, Fenno-Scandinavia" width="420">|<img src="figs/validation_dem+fch_merged_fin2_10000_fscs1_alps_map.png" alt="validation locations, Alps" width="420">|
 
 ## Training data and features
 
@@ -95,10 +95,10 @@ Features of the final model swe-ml-2. Latitude and longitude are read (for the p
 |terrain|height|elevation|m|DEM|
 |terrain|slope|terrain slope|°|DEM|
 |terrain|aspect|terrain aspect|°|DEM|
-|terrain|tpi|topographic position index||DEM|
-|terrain|dtw|distance to water|m|DEM|
-|terrain|dto|distance to ocean|m|DEM|
-|land cover|tcf|tree cover fraction|0..1|land cover|
+|terrain|tpi|topographic position index|m|DEM|
+|terrain|dtw|distance to water|m|TODO|
+|terrain|dto|distance to ocean|m|TODO|
+|land cover|tcf|tree cover fraction|0..1|TODO|
 |precipitation|tp|total precipitation|m|ERA5-Land|
 |precipitation|sf|snowfall|m w.e.|ERA5-Land|
 |energy|ssr, str, slhf, sshf|surface net solar and thermal radiation, latent and sensible heat flux|J m⁻²|ERA5-Land|
