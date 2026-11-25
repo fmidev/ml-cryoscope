@@ -204,8 +204,12 @@ def _open_parts(path):
             raise
     parts = []
     for ds in dss:
+        if not ds.data_vars:
+            continue
         name = "sd" if "sd" in ds.data_vars else list(ds.data_vars)[0]
         parts.append(ds[name])
+    if not parts:
+        raise ValueError(f"{os.path.basename(path)}: cfgrib finds no field (grid description wrong? see the ECCODES errors above)")
     return parts
 
 
@@ -1163,7 +1167,11 @@ def main():
             ens = check_ecens(ens, snowcap)
         else:
             print(f"{ens_name}: not available, maps without it")
-        e5 = load_e5()
+        try:
+            e5 = load_e5()
+        except Exception as ex:   # a broken remapped file must not stop the rest of the validation
+            print(f"WARNING: {ens_name} remapped to {FINE_GRID} not read, left out: {ex}")
+            e5 = None
         if e5 is not None:
             e5 = check_ecens(e5, snowcap, label=f"{ens_name} remapped to {FINE_GRID}", mask=False)
         df = validate(ecx, snowcap, label, name, ens=ens, ens_name=ens_name, ens500=e5, full=(label == "ensmean"))

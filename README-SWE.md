@@ -95,10 +95,10 @@ Features of the final model swe-ml-2. Latitude and longitude are read (for the p
 |terrain|height|elevation|m|DEM|
 |terrain|slope|terrain slope|°|DEM|
 |terrain|aspect|terrain aspect|°|DEM|
-|terrain|tpi|topographic position index|m|DEM|
-|terrain|dtw|distance to water|m|TODO|
-|terrain|dto|distance to ocean|m|TODO|
-|land cover|tcf|tree cover fraction|0..1|TODO|
+|terrain|tpi|topographic position index||DEM|
+|terrain|dtw|distance to water|m|DEM|
+|terrain|dto|distance to ocean|m|DEM|
+|land cover|tcf|tree cover fraction|0..1|land cover|
 |precipitation|tp|total precipitation|m|ERA5-Land|
 |precipitation|sf|snowfall|m w.e.|ERA5-Land|
 |energy|ssr, str, slhf, sshf|surface net solar and thermal radiation, latent and sensible heat flux|J m⁻²|ERA5-Land|
