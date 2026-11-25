@@ -4,7 +4,24 @@ cryo-ecxens-performance.py
 
 Validate ECXENS SWE forecasts against SNOWCAP SWE (Scandinavia 500 m), CryoSCOPE layout.
 
-usage: python cryo-ecxens-performance.py [BASE] [MODEL]      e.g. python cryo-ecxens-performance.py 20261121 swe-ml-2
+usage: python cryo-ecxens-performance.py [BASE] [MODEL] [redo | redo-adjusted]      e.g. python cryo-ecxens-performance.py 20191210 swe-ml-2
+
+Finished work is not done again: a prediction whose results exist (and whose ECXENS files have not changed since,
+.state-raw.json / .state-adjusted.json in the run folder) is skipped, existing pngs are not redrawn and the member
+ranking and time series are reused. 'redo' as the third argument does everything again; 'redo-adjusted' does the
+adjusted ECXENS and the adjusted-vs-raw comparison again and keeps the raw results. A product done again (also when its
+ECXENS files changed) first has its old folders removed (<pred>-adjusted/ for adjusted, the plain <pred>/ for raw),
+and adjusted-vs-raw/ is removed and made again whenever either product was done again.
+
+One run validates both ECXENS products, each with the full set of results below, into the same run folder
+OUT_ROOT/<MODEL>/<BASE>/ (one page in SnowLook):
+  raw ECXENS        -> <pred>/            ensmean, member01, driest-memberNN, wettest-memberNN, members, all
+  ECXENS adjusted   -> <pred>-adjusted/   ensmean-adjusted, member01-adjusted, ..., members-adjusted, all-adjusted
+                       (adjust-snow-ecxens.py, ECXENS_<base>T120000_swe-adjusted-<m>.grib, split by prep-ecxens-validation.sh;
+                       skipped with a message when not there), so every adjusted file has 'adjusted' in its name,
+                       e.g. swe-ml-2_20191210_ensmean-adjusted_ecxens-swe_20191211.png
+  and the two against each other in adjusted-vs-raw/ (see the end of this text).
+  MODEL may be given with or without -adjusted. RUN_RAW / RUN_ADJUSTED switch either off (the other's results are kept).
 
 Inputs, as prep-ecxens-validation.sh writes them, in ECX_DIR (/home/ubuntu/data/cryoscope/snowmodel/ECXENS/):
   ECXENS_<BT>_swe-<m>.grib, ECXENS_<BT>_swe-ensmean.grib        ECXENS SWE (mm) per member and ens mean, 500 m
@@ -33,8 +50,21 @@ Members (member01, driest-memberNN, wettest-memberNN), every day: only the maps 
   (ecxens-swe, ecens-swe on the raw ECENS grid, ecxens-bias); the period figures and scores as for the ens mean.
 Scores per lead day: ecxens-score-bias-mae, -rmse, -kge, -csi, -pod-far, -volume (ECENS remapped on the same plots),
   ecxens-vs-ecens500-skill, ecxens-vs-ecens-skill, ecxens-metrics.csv, info.json
+Regions (REGIONS: Finnish, Swedish and Norwegian Lapland, central and southern parts; country borders from Natural Earth):
+  ensmean: domain-mean-timeseries-regions (png, csv), regions-metrics.csv (daily scores per region), regions-score-summary.png
+  members: ecxens-timeseries-regions.png, ecens-timeseries-regions.png
 Over all members (pred = members): ecxens-timeseries.png, ecens-timeseries.png, timeseries.csv, ranking.csv
 Over all predictions (pred = all): ecxens-metrics.csv
+CLMS SWE (satellite, CLMS_20000101T000000_<day>T000000_swe_scandi.grib 5 km and ..._swe-500m_scandi.grib remapped to the
+  SNOWCAP grid, written by get-clms-swe.sh, looked for in CLMS_DIRS), raw ECXENS ens mean only:
+  clms-swe_D (5 km), clms500-swe_D (500 m) maps, and in domain-mean-timeseries (png, csv) and domain-mean-timeseries-regions
+  the columns clms (CLMS 500 m) and snowcap_clms (SNOWCAP on the same pixels: CLMS leaves mountains and glaciers out)
+Adjusted against raw (pred = adjusted-vs-raw), ens mean unless said:
+  adjusted-vs-raw-score-rmse, -bias, -mae, -kge, -skill (per lead day; ECENS remapped on the same plots),
+  adjusted-vs-raw-metrics.csv, adjusted-vs-raw-domain-mean-timeseries (png, csv), adjusted-vs-raw-timeseries-regions,
+  adjusted-vs-raw-regions-scores, adjusted-vs-raw-members-timeseries (member spread of both),
+  adjusted-vs-raw-mae-gain (|adjusted bias| minus |raw bias| over the SNOWCAP days, negative = adjusting helped),
+  adjustment-mean (adjusted minus raw, mean over the forecast days)
 
 Bias: forecast minus SNOWCAP (positive = too much snow). Two tier bias legend: soft greens / yellows up to
 MILD_BIAS (50 mm), strong blues / reds beyond, so the bad areas stand out.
@@ -42,6 +72,7 @@ MILD_BIAS (50 mm), strong blues / reds beyond, so the bad areas stand out.
 
 import os
 import sys
+import shutil
 import glob
 import json
 import numpy as np
@@ -55,10 +86,21 @@ from matplotlib.colors import ListedColormap, BoundaryNorm, LogNorm
 # ---------------------------------------------------------------- config
 BASE = sys.argv[1] if len(sys.argv) > 1 else '20261121'       # forecast base date, YYYYMMDD
 MODEL = sys.argv[2] if len(sys.argv) > 2 else 'swe-ml-2'      # model edition that produced ECXENS (goes into every file name)
+REDO = 'redo' in sys.argv[3:]   # True: everything again; False: finished predictions skipped, existing pngs kept
+REDO_ADJ = REDO or 'redo-adjusted' in sys.argv[3:]   # adjusted ECXENS and the comparison again, raw kept
+SKIP_PNG = not REDO             # per product: False when its ECXENS files changed since the last run
+ADJ_SUFFIX = '-adjusted'
+BASE_MODEL = MODEL[:-len(ADJ_SUFFIX)] if MODEL.endswith(ADJ_SUFFIX) else MODEL
+RUN_RAW = True            # validate raw ECXENS        -> <MODEL>/<BASE>/<pred>/
+RUN_ADJUSTED = True       # validate ECXENS adjusted   -> <MODEL>/<BASE>/<pred>-adjusted/
+COMPARE_ADJUSTED = True   # adjusted against raw       -> <MODEL>/<BASE>/adjusted-vs-raw/
+MODEL = BASE_MODEL
+PRED_TAG = ''             # '' for raw, '-adjusted' while the adjusted product runs (set_product)
+MODEL_LABEL = MODEL       # model name in the figure titles ('swe-ml-2 adjusted' for the adjusted product)
 BASE_TIME = pd.Timestamp(BASE)
 BT = f'{BASE_TIME:%Y%m%dT%H%M%S}'
 BASE_TAG = f'{BASE_TIME:%Y%m%d}'
-_fill = dict(BT=BT, MODEL=MODEL, Y=f'{BASE_TIME:%Y}')
+_fill = dict(BT=BT, BT12=f'{BASE_TIME:%Y%m%d}T120000', MODEL=MODEL, Y=f'{BASE_TIME:%Y}')
 
 SNOW_ROOT = '/home/ubuntu/data/cryoscope/snowmodel/'
 ECX_DIR = SNOW_ROOT + 'ECXENS/'
@@ -67,12 +109,37 @@ SNOWCAP_DIRS = [SNOW_ROOT + 'SNOWCAP/', ECX_DIR, SNOW_ROOT]
 OUT_ROOT = SNOW_ROOT + 'ecxens_validation/'
 OUTDIR = f'{OUT_ROOT}{MODEL}/{BASE_TAG}'
 PREFIX = f'{MODEL}_{BASE_TAG}'
+
+
+def set_product(adjusted):
+    """Outputs of the following steps: raw ECXENS (<pred>/) or ECXENS adjusted (<pred>-adjusted/)."""
+    global PRED_TAG, MODEL_LABEL
+    PRED_TAG = ADJ_SUFFIX if adjusted else ''
+    MODEL_LABEL = f"{MODEL} adjusted" if adjusted else MODEL
+
+
+def tagged(pred):
+    """Prediction folder of the current product: ensmean -> ensmean-adjusted while the adjusted one runs."""
+    return pred + PRED_TAG if PRED_TAG and not pred.endswith(PRED_TAG) else pred
+
+
+def prev_path(pred, kind, ext="png"):
+    """An output already written (same naming as out_path, pred as given, not registered)."""
+    d = os.path.join(OUTDIR, pred) if PRED_SUBFOLDERS else OUTDIR
+    return os.path.join(d, f"{PREFIX}_{pred}_{kind}.{ext}")
 PRED_SUBFOLDERS = True      # True: OUTDIR/<pred>/ folders; False: everything flat in OUTDIR (names are unique either way)
 
 # file names, tried in order ({m} = member 1..50 or ensmean); a template without {m} is one file holding all members
-ECX_TEMPLATES = ['ECXENS_{BT}_swe-{{m}}.grib',
-                 'ECXENS_{BT}_swe-500-nd.grib',
+# names with the model first, so a post-processed product (swe-adjust-hkl.py writes ECXENS_<BT>_swe-500-nd-<tag>-<m>.grib)
+# is found when the tag is given as the model, also when the plain members are in the same folder
+# ECXENS adjusted to HKL (adjust-snow-ecxens.py, joined as T120000 so SmartMet keeps it apart, split by prep-ecxens-validation.sh),
+# m = ensmean gives the ens mean file ECXENS_<base>T120000_swe-adjusted-ensmean.grib
+ADJ_TEMPLATES = ['ECXENS_{BT12}_swe-adjusted-{{m}}.grib']
+ADJ_MEAN_TEMPLATES = []
+ECX_TEMPLATES = [
                  'ECXENS_{BT}_swe-500-nd-{MODEL}-{{m}}.grib', 'ECXENS_{BT}_swe-500-nd_{MODEL}-{{m}}.grib',
+                 'ECXENS_{BT}_swe-{{m}}.grib',
+                 'ECXENS_{BT}_swe-500-nd.grib',
                  'ECXENS_{BT}_swe-500-nd-{{m}}.grib']
 ECENS_TEMPLATES = ['ECENS_{BT}_sd-{{m}}-fix.grib',
                    'ECENS_{BT}_sd.grib',
@@ -83,6 +150,13 @@ ECX_MEAN_TEMPLATES = ['ECXENS_{BT}_swe-ensmean.grib']
 ECENS_MEAN_TEMPLATES = ['ECENS_{BT}_sd-ensmean.grib', 'ECENS_{BT}_sd-ensmean-fix.grib']
 # raw ECENS ens mean remapped to the SNOWCAP 500 m grid (prep-ecxens-validation.sh, cdo remap); looked for in ECENS_DIRS
 ECENS500_TEMPLATES = ['ECENS_{BT}_sd-500m-ensmean.grib']
+# CLMS SWE (get-clms-swe.sh): raw 5 km Nordic cut and the remapdis to the SNOWCAP 500 m grid, mm, one file per day
+CLMS = True
+CLMS_DIRS = [ECX_DIR, SNOW_ROOT + 'CLMS/', SNOW_ROOT]
+CLMS_RAW_TEMPLATE = 'CLMS_20000101T000000_{D}T000000_swe_scandi.grib'
+CLMS_500_TEMPLATE = 'CLMS_20000101T000000_{D}T000000_swe-500m_scandi.grib'
+CLMS_SCALE = 1.0           # get-clms-swe.sh with MULC=1 writes mm
+CLMS_GRID = '5 km'
 ECENS_GRID = '9 km'      # raw ECENS grid, shown in the titles (the resolution in degrees is added from the file)
 FINE_GRID = '500 m'      # ECXENS / SNOWCAP grid, shown in the titles
 # daily maps of member01, driest and wettest (the ens mean gets every map)
@@ -93,14 +167,29 @@ SNOWCAP_TEMPLATES = ['SNOWCAP_{Y}_SWE.grib', 'SNOWCAP_20150101T000000_{Y}_SWE.gr
 SNOWCAP_MONTH_TEMPLATES = ['SNOWCAP_{YM}_swe.grib', 'SNOWCAP_{YM}_SWE.grib', 'HKL_{YM}_swe.grib', 'HKL_{YM}_SWE.grib']
 FC_DAYS = 15        # forecast length in days (months of SNOWCAP to look for)
 REGION = 'Scandinavia'
+# sub-regions for the time series and scores: key -> (shown name, country (Natural Earth ADM0_A3), latitude from, latitude to)
+# the latitude limits are rough lines between the parts of each country; edit freely
+REGIONS = {
+    'fin_lapland': ('Finnish Lapland', 'FIN', 66.0, 90.0),
+    'fin_central': ('Central Finland', 'FIN', 62.5, 66.0),
+    'fin_south':   ('Southern Finland', 'FIN', 0.0, 62.5),
+    'swe_lapland': ('Swedish Lapland', 'SWE', 65.5, 90.0),
+    'swe_central': ('Central Sweden', 'SWE', 60.5, 65.5),
+    'swe_south':   ('Southern Sweden', 'SWE', 0.0, 60.5),
+    'nor_north':   ('Northern Norway (Lapland)', 'NOR', 65.0, 90.0),
+    'nor_central': ('Central Norway', 'NOR', 62.5, 65.0),
+    'nor_south':   ('Southern Norway', 'NOR', 0.0, 62.5),
+}
+REGION_RESULTS = True      # regional time series and scores (needs cartopy for the country borders)
+REGION_MASK_STEP = 10      # country test on every 10th 500 m pixel (5 km), copied to the pixels around it: fast, borders within 5 km
 
 FIRST_MEMBER = 1           # the single member validated next to the ens mean (lowest available member if missing)
 MEMBERS = range(0, 51)     # members looked for (0 = control, used only if the file has it)
 ADD_EXTREME_MEMBERS = True # validate the driest and the wettest member too
 RANK_BY = "mean"           # mean: area weighted domain mean SWE over all lead days; max; p99; mean_last_day
-RERANK = True              # False reuses the ranking csv if it exists
+RERANK = REDO              # False reuses the ranking csv if it exists (also redone when the ECXENS files changed)
 MEMBER_TIMESERIES = True   # domain mean SWE of every member against SNOWCAP
-RETIMESERIES = True        # False reuses the time series csv if it exists
+RETIMESERIES = REDO        # False reuses the time series csv if it exists (also redone when the ECXENS files changed)
 ECENS_SCALE = 1000.0       # ECMWF sd is m w.e., x1000 gives mm
 ECX_SCALE = 1.0            # ECXENS is mm w.e.
 SNOWCAP_SCALE = 1000.0         # Scandinavian SNOWCAP SWE is m w.e., always x1000
@@ -164,7 +253,9 @@ rmse_norm = BoundaryNorm(rmse_bounds, rmse_cmap.N)
 MANIFEST = {}
 
 def out_path(pred, kind, day=None, ext="png"):
-    """<OUTDIR>/<pred>/<MODEL>_<BASE>_<pred>_<kind>[_<YYYYMMDD>].<ext>, registered in the manifest."""
+    """<OUTDIR>/<pred>/<MODEL>_<BASE>_<pred>_<kind>[_<YYYYMMDD>].<ext>, registered in the manifest.
+    pred gets '-adjusted' while the adjusted product runs."""
+    pred = tagged(pred)
     d = os.path.join(OUTDIR, pred) if PRED_SUBFOLDERS else OUTDIR
     os.makedirs(d, exist_ok=True)
     name = f"{PREFIX}_{pred}_{kind}" + (f"_{day:%Y%m%d}" if day is not None else "") + f".{ext}"
@@ -176,12 +267,22 @@ def out_path(pred, kind, day=None, ext="png"):
     return p
 
 
+def todo(path):
+    """False when the png exists and may be kept (SKIP_PNG): the figure is not drawn again."""
+    return not (SKIP_PNG and os.path.exists(path))
+
+
 def write_manifest():
     rows = [r for p, r in MANIFEST.items() if os.path.exists(p)]
     if not rows:
         return
     p = os.path.join(OUTDIR, f"{PREFIX}_manifest.csv")
-    pd.DataFrame(rows).sort_values(["pred", "kind", "valid_date"]).to_csv(p, index=False)
+    new = pd.DataFrame(rows)
+    if os.path.exists(p):   # keep the rows of the product not run this time (RUN_RAW or RUN_ADJUSTED off)
+        old = pd.read_csv(p, dtype=str)
+        old = old[~old["file"].isin(new["file"]) & old["file"].map(lambda f: os.path.exists(os.path.join(OUT_ROOT, f)))]
+        new = pd.concat([old, new.astype(str)], ignore_index=True)
+    new.sort_values(["pred", "kind", "valid_date"]).to_csv(p, index=False)
     print(f"Manifest of {len(rows)} files -> {p}")
 
 
@@ -292,6 +393,14 @@ class Source:
     def members(self):
         return list(self.numbers)
 
+    def mtime(self):
+        """Newest modification time of the files: a changed forecast makes its results be done again."""
+        if self.split:
+            ps = [self.path.format(m=m) for m in self.numbers] + ([self.mean_path] if self.mean_path else [])
+        else:
+            ps = [self.path]
+        return max((os.path.getmtime(p) for p in ps if os.path.exists(p)), default=0.0)
+
     def load(self, m):
         if self.split:
             if m == "ensmean":
@@ -377,6 +486,35 @@ def load_snowcap():
     return snowcap, files
 
 
+def clms_path(template, day):
+    name = template.format(D=f"{pd.Timestamp(day):%Y%m%d}")
+    return next((d + name for d in CLMS_DIRS if os.path.exists(d + name)), None)
+
+
+def clms_available():
+    """True when CLMS 500 m files exist for some forecast days."""
+    if not CLMS:
+        return False
+    days = [BASE_TIME + pd.Timedelta(days=d) for d in range(1, FC_DAYS + 1)]
+    n = sum(clms_path(CLMS_500_TEMPLATE, d) is not None for d in days)
+    print(f"CLMS SWE: {n} of {FC_DAYS} forecast days with the 500 m file"
+          + ("" if n else f" (looked for {CLMS_500_TEMPLATE.format(D='<day>')} in {', '.join(CLMS_DIRS)})"))
+    return n > 0
+
+
+def load_clms(template, day, label):
+    """One day of CLMS SWE (mm, 2D DataArray), None when there is no file; negative flags and fill values masked."""
+    p = clms_path(template, day)
+    if p is None:
+        return None
+    try:
+        da = load_field(p, CLMS_SCALE).isel(valid_time=0, drop=True)
+    except Exception as ex:
+        print(f"WARNING: {label} {os.path.basename(p)} not read: {ex}")
+        return None
+    return da.where((da >= 0) & (da < 5000))
+
+
 def check_ecens(ens, snowcap, label="ECENS", mask=True):
     emax = float(ens.max())
     print(f"{label} SWE after x{ECENS_SCALE:g}: max {emax:.1f} mm, mean {float(ens.mean()):.1f} mm")
@@ -443,6 +581,82 @@ def to_coarse(field, idx, n_all, shape):
     with np.errstate(invalid="ignore", divide="ignore"):
         m = np.where((n_all > 0) & (cnt >= MIN_COVER * n_all), ssum / np.maximum(cnt, 1), np.nan)
     return m.reshape(shape)
+
+
+# ---------------------------------------------------------------- regions
+_CPATHS = None
+_REG = {}
+
+def _country_paths():
+    """Outlines of the countries in REGIONS as matplotlib paths, from Natural Earth (cartopy); {} when not available."""
+    global _CPATHS
+    if _CPATHS is not None:
+        return _CPATHS
+    _CPATHS = {}
+    try:
+        import cartopy.io.shapereader as shpreader
+        from matplotlib.path import Path
+        codes = {c for _, c, _, _ in REGIONS.values()}
+        shp = shpreader.natural_earth(resolution="50m", category="cultural", name="admin_0_countries")
+        for rec in shpreader.Reader(shp).records():
+            a = rec.attributes
+            code = a.get("ADM0_A3") or a.get("adm0_a3")
+            if code in codes:
+                _CPATHS[code] = [Path(np.asarray(g.exterior.coords)[:, :2]) for g in getattr(rec.geometry, "geoms", [rec.geometry])]
+        print(f"country borders for the regions: {', '.join(sorted(_CPATHS))}")
+    except Exception as e:
+        print(f"WARNING: country borders not available ({e.__class__.__name__}: {e}), no regional results")
+        _CPATHS = {}
+    return _CPATHS
+
+
+def region_index(lat, lon, step=1):
+    """Flat pixel indices (int32) of every region in REGIONS on a lat/lon grid, {} without country borders.
+    The country test runs on every step-th pixel and is copied to the pixels around it; the latitude limits are exact."""
+    key = (lat.size, lon.size, float(lat[0]), float(lon[0]), step)
+    if key in _REG:
+        return _REG[key]
+    paths = _country_paths() if REGION_RESULTS else {}
+    out = {}
+    if paths:
+        slat, slon = lat[::step], lon[::step]
+        LON, LAT = np.meshgrid(slon, slat)
+        pts = np.column_stack([LON.ravel(), LAT.ravel()])
+        rows = (np.arange(lat.size) // step)[:, None]
+        cols = (np.arange(lon.size) // step)[None, :]
+        country = {}
+        for code, plist in paths.items():
+            m = np.zeros(len(pts), bool)
+            for pth in plist:
+                x0, y0 = pth.vertices.min(axis=0)
+                x1, y1 = pth.vertices.max(axis=0)
+                inb = (pts[:, 0] >= x0) & (pts[:, 0] <= x1) & (pts[:, 1] >= y0) & (pts[:, 1] <= y1)
+                if inb.any():
+                    m[inb] |= pth.contains_points(pts[inb])
+            country[code] = m.reshape(slat.size, slon.size)
+        for k, (name, code, la0, la1) in REGIONS.items():
+            if code not in country or not country[code].any():
+                continue
+            band = ((lat >= la0) & (lat < la1))[:, None]
+            idx = np.flatnonzero(country[code][rows, cols] & band).astype(np.int32)
+            if idx.size:
+                out[k] = idx
+        print(f"regions on the {lat.size}x{lon.size} grid: " + ", ".join(f"{REGIONS[k][0]} {v.size}" for k, v in out.items()))
+    _REG[key] = out
+    return out
+
+
+def rmean(field, idx, w_rows, ncol, extra=None):
+    """Area weighted mean of a 2D field over the pixels idx (finite values, and extra (2D bool) where given);
+    w_rows: weight per grid row."""
+    v = field.ravel()[idx]
+    ok = np.isfinite(v)
+    if extra is not None:
+        ok &= extra.ravel()[idx]
+    if not ok.any():
+        return np.nan
+    w = w_rows[idx[ok] // ncol]
+    return float(np.sum(v[ok] * w) / np.sum(w))
 
 
 # ---------------------------------------------------------------- coastlines (optional)
@@ -539,6 +753,8 @@ def bias_colorbar(fig, im, ax, shrink=0.8, label=BIAS_LABEL):
 
 
 def save_bias_map(path, data, extent, aspect, lines, title, view=None, label=BIAS_LABEL):
+    if not todo(path):
+        return
     fig, ax = plt.subplots(figsize=(7, 8), constrained_layout=True)
     im = draw_map(ax, data, bias_cmap, bias_norm, extent, aspect, lines, title, view=view)
     bias_colorbar(fig, im, ax, label=label)
@@ -547,6 +763,8 @@ def save_bias_map(path, data, extent, aspect, lines, title, view=None, label=BIA
 
 
 def save_rmse_map(path, data, extent, aspect, lines, title):
+    if not todo(path):
+        return
     fig, ax = plt.subplots(figsize=(7, 8), constrained_layout=True)
     im = draw_map(ax, data, rmse_cmap, rmse_norm, extent, aspect, lines, title)
     fig.colorbar(im, ax=ax, extend="max", ticks=rmse_bounds, spacing="uniform", shrink=0.8, label="mm")
@@ -556,6 +774,8 @@ def save_rmse_map(path, data, extent, aspect, lines, title):
 
 def save_panel(path, data, ext, aspect, lines, title, view):
     """One SWE map alone, no colour bar: maps with the same view get the same figure size, so they line up."""
+    if not todo(path):
+        return
     w = PANEL_HEIGHT * (view[1] - view[0]) / ((view[3] - view[2]) * aspect)
     fig, ax = plt.subplots(figsize=(max(w, 3.0), PANEL_HEIGHT), constrained_layout=True)
     draw_map(ax, data, swe_cmap, swe_norm, ext, aspect, lines, title, view=view)
@@ -564,6 +784,8 @@ def save_panel(path, data, ext, aspect, lines, title, view):
 
 
 def save_swe_legend(path):
+    if not todo(path):
+        return
     fig, ax = plt.subplots(figsize=(12, 1.1), constrained_layout=True)
     cb = fig.colorbar(plt.cm.ScalarMappable(norm=swe_norm, cmap=swe_cmap), cax=ax, orientation="horizontal",
                       extend="both", ticks=SWE_BOUNDS, spacing="uniform")
@@ -574,6 +796,8 @@ def save_swe_legend(path):
 
 def lead_plot(path, title, series, ylabel=None, ylim=None, zero=False, legend_kw=None):
     """One score against lead day; series = list of (x, y, style, label)."""
+    if not todo(path):
+        return
     fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
     for x, y, style, lab in series:
         ax.plot(x, y, style, label=lab)
@@ -600,10 +824,13 @@ def wmean(v, ok, w):
 def plot_ensmean_timeseries(tsd, pred, name, ens_name):
     """Domain mean SWE per day: ECXENS, ECENS remapped to 500 m and SNOWCAP, over the same pixels."""
     fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
-    for col, lab, sty in [("ecxens", f"{name} ({MODEL}, {FINE_GRID})", dict(color="tab:blue", lw=2, marker="o")),
+    for col, lab, sty in [("ecxens", f"{name} ({MODEL_LABEL}, {FINE_GRID})", dict(color="tab:blue", lw=2, marker="o")),
                           ("ecens500", f"{ens_name} remapped to the SNOWCAP grid ({FINE_GRID})",
                            dict(color="tab:orange", lw=2, ls="--", marker="s")),
-                          ("snowcap", f"SNOWCAP ({FINE_GRID})", dict(color="red", lw=2.5, marker="o"))]:
+                          ("snowcap", f"SNOWCAP ({FINE_GRID})", dict(color="red", lw=2.5, marker="o")),
+                          ("clms", "CLMS SWE (satellite, remapped to 500 m), CLMS pixels only",
+                           dict(color="tab:purple", lw=2, ls="-.", marker="^")),
+                          ]:
         if col in tsd and tsd[col].notna().any():
             d = tsd.dropna(subset=[col])
             ax.plot(d["date"], d[col], label=lab, **sty)
@@ -612,7 +839,9 @@ def plot_ensmean_timeseries(tsd, pred, name, ens_name):
     ax.set_xticklabels([f"{pd.Timestamp(t):%m-%d}\n+{(pd.Timestamp(t) - BASE_TIME).days} d" for t in dates], fontsize=8)
     ax.set_xlabel("date and lead day")
     ax.set_ylabel("domain mean SWE (mm)")
-    ax.set_title(f"Domain mean SWE, SNOWCAP domain, same pixels for every line\nbase {BASE_TIME:%Y-%m-%d} ({MODEL})")
+    ax.set_title(f"Domain mean SWE, SNOWCAP domain, same pixels for every line"
+                 + (" (CLMS lines: CLMS pixels only)" if "clms" in tsd and tsd["clms"].notna().any() else "")
+                 + f"\nbase {BASE_TIME:%Y-%m-%d} ({MODEL_LABEL})")
     ax.grid(alpha=0.3)
     ax.legend()
     p = out_path(pred, "domain-mean-timeseries")
@@ -622,16 +851,100 @@ def plot_ensmean_timeseries(tsd, pred, name, ens_name):
     print(f"domain mean time series -> {p}")
 
 
-def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None, full=True):
+def region_grid(keys):
+    """Subplot grid for the regions, 3 columns."""
+    ncol = 3
+    nrow = -(-len(keys) // ncol)
+    fig, axes = plt.subplots(nrow, ncol, figsize=(5.2 * ncol, 3.6 * nrow), constrained_layout=True, sharex=True, squeeze=False)
+    for ax in axes.ravel()[len(keys):]:
+        ax.set_visible(False)
+    return fig, axes.ravel()
+
+
+def date_ticks(ax, dates):
+    ax.set_xticks(dates[::2])
+    ax.set_xticklabels([f"{pd.Timestamp(t):%m-%d}\n+{(pd.Timestamp(t) - BASE_TIME).days} d" for t in dates[::2]], fontsize=7)
+
+
+def plot_region_timeseries(tsd, pred, name, ens_name):
+    """Domain mean SWE per day in every region: ECXENS, ECENS remapped and SNOWCAP over the same pixels."""
+    keys = [k for k in REGIONS if k in set(tsd["region"])]
+    if not keys:
+        return
+    fig, axes = region_grid(keys)
+    dates = sorted(tsd["date"].unique())
+    for ax, k in zip(axes, keys):
+        d = tsd[tsd["region"] == k]
+        for col, lab, sty in [("ecxens", f"{name} ({MODEL_LABEL})", dict(color="tab:blue", lw=1.8, marker="o", ms=3)),
+                              ("ecens500", f"{ens_name} remapped", dict(color="tab:orange", lw=1.8, ls="--", marker="s", ms=3)),
+                              ("snowcap", "SNOWCAP", dict(color="red", lw=2.2, marker="o", ms=3)),
+                              ("clms", "CLMS (CLMS pixels)", dict(color="tab:purple", lw=1.6, ls="-.", marker="^", ms=3))]:
+            if col in d and d[col].notna().any():
+                ax.plot(d["date"], d[col], label=lab, **sty)
+        ax.set_title(REGIONS[k][0], fontsize=10)
+        ax.grid(alpha=0.3)
+        date_ticks(ax, dates)
+    axes[0].set_ylabel("domain mean SWE (mm)")
+    axes[0].legend(fontsize=7)
+    fig.suptitle(f"Domain mean SWE per region ({FINE_GRID}, same pixels for every line), base {BASE_TIME:%Y-%m-%d} ({MODEL_LABEL})")
+    p = out_path(pred, "domain-mean-timeseries-regions")
+    fig.savefig(p, dpi=DPI)
+    plt.close(fig)
+    tsd.assign(region_name=tsd["region"].map(lambda k: REGIONS[k][0])).to_csv(
+        out_path(pred, "domain-mean-timeseries-regions", ext="csv"), index=False, float_format="%.4f")
+    print(f"regional domain mean time series -> {p}")
+
+
+def plot_region_scores(rdf, pred, name, ens_name):
+    """Daily scores per region to csv, and the means over the lead days as bars: ECXENS against ECENS remapped."""
+    rdf.assign(region_name=rdf["region"].map(lambda k: REGIONS[k][0])).to_csv(
+        out_path(pred, "regions-metrics", ext="csv"), index=False, float_format="%.4f")
+    keys = [k for k in REGIONS if k in set(rdf["region"])]
+    m = rdf.groupby("region").mean(numeric_only=True).reindex(keys)
+    has5 = "ecens500_rmse" in m and m["ecens500_rmse"].notna().any()
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5.5), constrained_layout=True)
+    x = np.arange(len(keys))
+    wbar = 0.38 if has5 else 0.7
+    names = [REGIONS[k][0] for k in keys]
+    for ax, (sc, title) in zip(axes[:2], [("rmse", "RMSE (mm)"), ("bias", "bias, forecast minus SNOWCAP (mm)")]):
+        ax.bar(x - (wbar / 2 if has5 else 0), m[sc], wbar, label=f"{name} ({MODEL_LABEL})", color="tab:blue")
+        if has5:
+            ax.bar(x + wbar / 2, m[f"ecens500_{sc}"], wbar, label=f"{ens_name} remapped", color="tab:orange")
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=35, ha="right", fontsize=8)
+        ax.set_title(title)
+        ax.axhline(0, color="k", lw=0.6)
+        ax.grid(alpha=0.3, axis="y")
+    axes[0].legend(fontsize=8)
+    ax = axes[2]
+    if "skill_mse_vs_ecens500" in m and m["skill_mse_vs_ecens500"].notna().any():
+        cols = ["tab:green" if v > 0 else "tab:red" for v in m["skill_mse_vs_ecens500"]]
+        ax.bar(x, m["skill_mse_vs_ecens500"], 0.7, color=cols)
+        ax.set_title("MSE skill of ECXENS vs ECENS remapped\n(above 0 = ECXENS closer to SNOWCAP)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=8)
+    ax.axhline(0, color="k", lw=0.6)
+    ax.grid(alpha=0.3, axis="y")
+    fig.suptitle(f"Scores per region, means over the lead days, SWE {FINE_GRID}, base {BASE_TIME:%Y-%m-%d} ({MODEL_LABEL})")
+    p = out_path(pred, "regions-score-summary")
+    fig.savefig(p, dpi=DPI)
+    plt.close(fig)
+    print(f"regional scores -> {p}")
+    cols = [c for c in ["rmse", "ecens500_rmse", "bias", "ecens500_bias", "skill_mse_vs_ecens500"] if c in m]
+    print(m[cols].rename(index=lambda k: REGIONS[k][0]).round(2).to_string())
+
+
+def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None, full=True, clms=False):
     """Validation of one prediction. Forecast maps for every forecast day, bias maps and scores on the days
     SNOWCAP has data. ens: raw ECENS of the same member (its own grid); ens500: ECENS remapped to the SNOWCAP
     500 m grid (ens mean only). full: every map (ens mean); False: only the maps in MEMBER_KINDS (member01,
-    driest, wettest). Returns the daily scores DataFrame (None without SNOWCAP days)."""
+    driest, wettest). clms: CLMS SWE maps and time series lines (raw ECXENS ens mean).
+    Returns the daily scores DataFrame (None without SNOWCAP days)."""
     def want(kind):
         return full or kind in MEMBER_KINDS
 
     with open(out_path(pred, "info", ext="json"), "w") as f:
-        json.dump({"model": MODEL, "base": BASE_TAG, "pred": pred, "name": name,
+        json.dump({"model": MODEL, "base": BASE_TAG, "pred": tagged(pred), "name": name, "adjusted": bool(PRED_TAG),
                    "ecens_name": ens_name if ens is not None else None, "ecens500": ens500 is not None}, f)
     if SAVE_PANELS:
         save_swe_legend(out_path(pred, "swe-legend"))
@@ -651,7 +964,7 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
     extent = grid_extent(ecx)
     aspect = 1.0 / np.cos(np.deg2rad(lat.mean()))
     lines = get_lines(extent)
-    tag = f"{MODEL}, base {BASE_TIME:%Y-%m-%d}"
+    tag = f"{MODEL_LABEL}, base {BASE_TIME:%Y-%m-%d}"
     if ens is not None:
         ens_extent = grid_extent(ens)
         ens_lines = get_lines(ens_extent) if ECENS_OWN_EXTENT else lines
@@ -682,6 +995,9 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
     sum_g5 = np.zeros_like(sum_d)      # |ECXENS bias| minus |ECENS remapped bias|
     cnt5 = np.zeros_like(sum_d)
     dom = np.isfinite(snowcap.isel(valid_time=0).values) if snowcap is not None else None
+    ridx = region_index(lat, lon, REGION_MASK_STEP) if full else {}   # regions: ens mean only
+    area_rows = area[:, 0]
+    reg_ts, reg_rows = [], []
     edges = np.linspace(0, 1500, 301)
     H = np.zeros((edges.size - 1, edges.size - 1))
     rows, ts_rows = [], []
@@ -694,6 +1010,20 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
         e = ens.sel(valid_time=t).values if (ens is not None and np.isin(t, ens_times)) else None
         e5 = e5da.sel(valid_time=t).values if np.isin(t, e5_times) else None
         when = f"{ts:%Y-%m-%d} (lead {lead} d)"
+        c5 = None
+        if clms:
+            c5da = load_clms(CLMS_500_TEMPLATE, ts, "CLMS 500 m")
+            if c5da is not None:
+                c5 = match_grid(ecx.isel(valid_time=0), c5da, "CLMS 500 m").values
+            p_raw = out_path(pred, "clms-swe", ts)
+            if todo(p_raw):
+                craw = load_clms(CLMS_RAW_TEMPLATE, ts, f"CLMS {CLMS_GRID}")
+                if craw is not None:
+                    save_panel(p_raw, craw.values, grid_extent(craw), aspect, lines,
+                               f"CLMS SWE (satellite, raw grid, {CLMS_GRID})\n{ts:%Y-%m-%d}", extent)
+            if c5 is not None:
+                save_panel(out_path(pred, "clms500-swe", ts), c5, extent, aspect, lines,
+                           f"CLMS SWE (remapped to the SNOWCAP grid, {FINE_GRID})\n{ts:%Y-%m-%d}", extent)
 
         # ---- SWE maps, each producer in its own file, grid in the title
         if SAVE_PANELS:
@@ -707,7 +1037,7 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
                            f"{ens_name} SWE (remapped to the SNOWCAP grid, {FINE_GRID})\n{when}", extent)
             if want("ecxens-swe"):
                 save_panel(out_path(pred, "ecxens-swe", ts), s, extent, aspect, lines,
-                           f"{name} SWE ({MODEL}, {FINE_GRID})\n{when}", extent)
+                           f"{name} SWE ({MODEL_LABEL}, {FINE_GRID})\n{when}", extent)
             if o is not None and want("snowcap-swe"):
                 save_panel(out_path(pred, "snowcap-swe", ts), o, extent, aspect, lines,
                            f"SNOWCAP SWE ({FINE_GRID})\n{ts:%Y-%m-%d}", extent)
@@ -733,9 +1063,21 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
                 ok &= np.isfinite(e5)
             if o is not None:
                 ok &= np.isfinite(o)
+            # CLMS leaves out mountains, glaciers and water: its line and SNOWCAP over the same pixels (snowcap_clms)
+            oc = ok & np.isfinite(c5) if c5 is not None else None
+            crow = ({"clms": wmean(c5, oc, wgt), "snowcap_clms": wmean(o, oc, wgt) if o is not None else np.nan}
+                    if c5 is not None else ({"clms": np.nan, "snowcap_clms": np.nan} if clms else {}))
             ts_rows.append({"date": ts, "lead_day": lead, "ecxens": wmean(s, ok, wgt),
                             "ecens500": wmean(e5, ok, wgt) if e5 is not None else np.nan,
-                            "snowcap": wmean(o, ok, wgt) if o is not None else np.nan})
+                            "snowcap": wmean(o, ok, wgt) if o is not None else np.nan, **crow})
+            for k, idx in ridx.items():
+                rc = ({"clms": rmean(c5, idx, area_rows, lon.size, oc),
+                       "snowcap_clms": rmean(o, idx, area_rows, lon.size, oc) if o is not None else np.nan}
+                      if c5 is not None else ({"clms": np.nan, "snowcap_clms": np.nan} if clms else {}))
+                reg_ts.append({"date": ts, "lead_day": lead, "region": k,
+                               "ecxens": rmean(s, idx, area_rows, lon.size, ok),
+                               "ecens500": rmean(e5, idx, area_rows, lon.size, ok) if e5 is not None else np.nan,
+                               "snowcap": rmean(o, idx, area_rows, lon.size, ok) if o is not None else np.nan, **rc})
 
         if o is None:
             print(f"{name} {ts:%Y-%m-%d} lead {lead:2d}  no SNOWCAP, maps only  ECX max {np.nanmax(s):.1f}")
@@ -747,7 +1089,7 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
         # ---- ECXENS minus SNOWCAP
         if want("ecxens-bias"):
             save_bias_map(out_path(pred, "ecxens-bias", ts), d, extent, aspect, lines,
-                          f"{name} minus SNOWCAP SWE ({MODEL}, {FINE_GRID})\n{when}")
+                          f"{name} minus SNOWCAP SWE ({MODEL_LABEL}, {FINE_GRID})\n{when}")
 
         # ---- ECENS remapped to 500 m minus SNOWCAP
         valid5 = None
@@ -834,6 +1176,22 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
             row["skill_mse_vs_ecens"] = 1 - float(np.mean((xc[okc] - hc[okc]) ** 2)) / mse_e if mse_e > 0 else np.nan
             row["frac_cells_improved"] = float(np.mean(gain[okc] < 0))
         rows.append(row)
+        for k, idx in ridx.items():
+            sr, orr = s.ravel()[idx], o.ravel()[idx]
+            vr = np.isfinite(sr) & np.isfinite(orr)
+            if vr.sum() < 2:
+                continue
+            rr = {"date": ts.date(), "lead_day": lead, "region": k}
+            rr.update(scores(sr[vr], orr[vr]))
+            if e5 is not None:
+                er = e5.ravel()[idx]
+                v5 = vr & np.isfinite(er)
+                if v5.sum() > 1:
+                    for kk, vv in scores(er[v5], orr[v5]).items():
+                        rr[f"ecens500_{kk}"] = vv
+                    m5 = float(np.mean((er[v5].astype("float64") - orr[v5]) ** 2))
+                    rr["skill_mse_vs_ecens500"] = 1 - float(np.mean((sr[v5].astype("float64") - orr[v5]) ** 2)) / m5 if m5 > 0 else np.nan
+            reg_rows.append(rr)
         e5_txt = (f"  | 500m RMSE ECENS {row['ecens500_rmse']:.1f} skill {row['skill_mse_vs_ecens500']:+.2f}"
                   if "ecens500_rmse" in row else "")
         ens_txt = (f"  | 0.1deg RMSE ECENS {row['ecens_rmse']:.1f} ECXENS {row['ecx01_rmse']:.1f} skill {row['skill_mse_vs_ecens']:+.2f}"
@@ -843,6 +1201,10 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
 
     if full and ts_rows:
         plot_ensmean_timeseries(pd.DataFrame(ts_rows), pred, name, ens_name or "ECENS")
+    if reg_ts:
+        plot_region_timeseries(pd.DataFrame(reg_ts), pred, name, ens_name or "ECENS")
+    if reg_rows:
+        plot_region_scores(pd.DataFrame(reg_rows), pred, name, ens_name or "ECENS")
 
     if not rows:
         print(f"{name}: no days with SNOWCAP, forecast maps only")
@@ -858,9 +1220,9 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
         mean_bias = np.where(cnt > 0, sum_d / cnt, np.nan)
         rmse_map = np.where(cnt > 0, np.sqrt(sum_d2 / cnt), np.nan)
     save_bias_map(out_path(pred, "ecxens-mean-bias"), mean_bias, extent, aspect, lines,
-                  f"Mean bias {name} minus SNOWCAP SWE ({MODEL}, {FINE_GRID})\n{period}", label="mm")
+                  f"Mean bias {name} minus SNOWCAP SWE ({MODEL_LABEL}, {FINE_GRID})\n{period}", label="mm")
     save_rmse_map(out_path(pred, "ecxens-rmse"), rmse_map, extent, aspect, lines,
-                  f"RMSE {name} SWE ({MODEL}, {FINE_GRID})\n{period}")
+                  f"RMSE {name} SWE ({MODEL_LABEL}, {FINE_GRID})\n{period}")
 
     # ---- the same for ECENS remapped to 500 m, and the MAE change ECXENS against it
     if cnt5.any():
@@ -900,7 +1262,7 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
     ax.plot([0, 1500], [0, 1500], "k--", lw=0.8)
     ax.set_xlabel(f"SNOWCAP SWE (mm, {FINE_GRID})")
     ax.set_ylabel(f"{name} SWE (mm, {FINE_GRID})")
-    ax.set_title(f"Pixel density, all days pooled ({MODEL})\n{period} (0 to 1500 mm)")
+    ax.set_title(f"Pixel density, all days pooled ({MODEL_LABEL})\n{period} (0 to 1500 mm)")
     ax.set_aspect("equal")
     fig.savefig(out_path(pred, "ecxens-density-scatter"), dpi=DPI)
     plt.close(fig)
@@ -956,6 +1318,7 @@ def scan_members(ecx_src, ens_src, snowcap_raw, want_ts, want_ecx_mean, want_ens
     rank_rows, ts_rows = [], []
     acc = {}
     snowcap = snowcap_mask = ci = cell_static = None
+    rx = re_ = None   # regions on the ECXENS and the ECENS grid
     snowcap_times = np.array([], dtype="datetime64[ns]")
     hx_done, he_done = set(), set()
 
@@ -1004,24 +1367,42 @@ def scan_members(ecx_src, ens_src, snowcap_raw, want_ts, want_ecx_mean, want_ens
                 ci = (cidx, cn_all, cshape)
                 if snowcap_mask is not None:
                     cell_static = np.isfinite(to_coarse(np.where(snowcap_mask, 1.0, np.nan), *ci))
+                re_ = region_index(elat, elon, 1)
+                we_rows = np.cos(np.deg2rad(elat))
+            if rx is None:
+                rx = region_index(lat, lon, REGION_MASK_STEP)
+                wx_rows = np.cos(np.deg2rad(lat))
             for t in ecx.valid_time.values:
                 ts = pd.Timestamp(t)
                 s = ecx.sel(valid_time=t).values
                 ok = np.isfinite(s) & (snowcap_mask if snowcap_mask is not None else True)
-                ts_rows.append({"date": ts, "source": "ECXENS", "member": m, "swe_mm": wmean(s, ok, wx)})
+                ts_rows.append({"date": ts, "source": "ECXENS", "member": m, "region": "all", "swe_mm": wmean(s, ok, wx)})
+                for k, idx in rx.items():
+                    ts_rows.append({"date": ts, "source": "ECXENS", "member": m, "region": k,
+                                    "swe_mm": rmean(s, idx, wx_rows, lon.size, snowcap_mask)})
                 o = snowcap.sel(valid_time=t).values if np.isin(t, snowcap_times) else None
                 if o is not None and ts not in hx_done:
-                    ts_rows.append({"date": ts, "source": "SNOWCAP_ECXENS", "member": -1, "swe_mm": wmean(o, ok & np.isfinite(o), wx)})
+                    ts_rows.append({"date": ts, "source": "SNOWCAP_ECXENS", "member": -1, "region": "all",
+                                    "swe_mm": wmean(o, ok & np.isfinite(o), wx)})
+                    for k, idx in rx.items():
+                        ts_rows.append({"date": ts, "source": "SNOWCAP_ECXENS", "member": -1, "region": k,
+                                        "swe_mm": rmean(o, idx, wx_rows, lon.size, snowcap_mask)})
                     hx_done.add(ts)
                 if ens is not None and np.isin(t, ens.valid_time.values):
                     e = ens.sel(valid_time=t).values
                     cell_ok = cell_static if cell_static is not None else np.isfinite(to_coarse(s, *ci))
                     okc = np.isfinite(e) & cell_ok
-                    ts_rows.append({"date": ts, "source": "ECENS", "member": m, "swe_mm": wmean(e, okc, we)})
+                    ts_rows.append({"date": ts, "source": "ECENS", "member": m, "region": "all", "swe_mm": wmean(e, okc, we)})
+                    for k, idx in (re_ or {}).items():
+                        ts_rows.append({"date": ts, "source": "ECENS", "member": m, "region": k,
+                                        "swe_mm": rmean(e, idx, we_rows, e.shape[1], cell_ok)})
                     if o is not None and ts not in he_done:
                         hc = to_coarse(o, *ci)
-                        ts_rows.append({"date": ts, "source": "SNOWCAP_ECENS", "member": -1,
+                        ts_rows.append({"date": ts, "source": "SNOWCAP_ECENS", "member": -1, "region": "all",
                                         "swe_mm": wmean(hc, okc & np.isfinite(hc), we)})
+                        for k, idx in (re_ or {}).items():
+                            ts_rows.append({"date": ts, "source": "SNOWCAP_ECENS", "member": -1, "region": k,
+                                            "swe_mm": rmean(hc, idx, we_rows, hc.shape[1], cell_ok)})
                         he_done.add(ts)
         txt = f"member {m:2d}"
         if ecx is not None:
@@ -1043,7 +1424,11 @@ def scan_members(ecx_src, ens_src, snowcap_raw, want_ts, want_ecx_mean, want_ens
 
 
 def plot_member_timeseries(df):
-    """One plot per producer: members thin blue, ens mean of the members black, SNOWCAP red."""
+    """One plot per producer: members thin blue, ens mean of the members black, SNOWCAP red; whole domain, then per region."""
+    if "region" not in df:
+        df = df.assign(region="all")
+    plot_member_timeseries_regions(df)
+    df = df[df["region"] == "all"]
     for src, hsrc, kind, what in [("ECXENS", "SNOWCAP_ECXENS", "ecxens-timeseries", "ECXENS (500 m, SNOWCAP domain)"),
                                   ("ECENS", "SNOWCAP_ECENS", "ecens-timeseries", "raw ECENS (0.1° cells, SNOWCAP averaged into the cells)")]:
         d = df[df["source"] == src]
@@ -1065,7 +1450,7 @@ def plot_member_timeseries(df):
         ax.set_xticklabels([f"{pd.Timestamp(t):%m-%d}\n+{(pd.Timestamp(t) - BASE_TIME).days} d" for t in dates], fontsize=8)
         ax.set_xlabel("date and lead day")
         ax.set_ylabel("domain mean SWE (mm)")
-        ax.set_title(f"{what}, all members vs SNOWCAP, base {BASE_TIME:%Y-%m-%d} ({MODEL})")
+        ax.set_title(f"{what}, all members vs SNOWCAP, base {BASE_TIME:%Y-%m-%d} ({MODEL_LABEL})")
         ax.grid(alpha=0.3)
         ax.legend()
         p = out_path("members", kind)
@@ -1074,15 +1459,93 @@ def plot_member_timeseries(df):
         print(f"time series plot -> {p}")
 
 
-# ---------------------------------------------------------------- main
-def main():
-    os.makedirs(OUTDIR, exist_ok=True)
-    print(f"model {MODEL}, base {BASE_TIME:%Y-%m-%d}, outputs in {OUTDIR}")
+def plot_member_timeseries_regions(df):
+    """Every member, their mean and SNOWCAP per region, one figure per producer with a panel per region."""
+    keys = [k for k in REGIONS if k in set(df["region"])]
+    if not keys:
+        return
+    for src, hsrc, kind, what in [("ECXENS", "SNOWCAP_ECXENS", "ecxens-timeseries-regions", f"ECXENS ({FINE_GRID})"),
+                                  ("ECENS", "SNOWCAP_ECENS", "ecens-timeseries-regions", f"raw ECENS ({ECENS_GRID} cells)")]:
+        if df[df["source"] == src].empty:
+            continue
+        fig, axes = region_grid(keys)
+        dates = sorted(df.loc[df["source"] == src, "date"].unique())
+        for ax, k in zip(axes, keys):
+            d = df[(df["source"] == src) & (df["region"] == k)]
+            for i, (m, g) in enumerate(d.groupby("member")):
+                g = g.sort_values("date")
+                ax.plot(g["date"], g["swe_mm"], color="tab:blue", lw=0.6, alpha=0.5, label=f"members ({d['member'].nunique()})" if i == 0 else None)
+            mean = d.groupby("date")["swe_mm"].mean()
+            ax.plot(mean.index, mean.values, color="k", lw=1.6, label="member mean")
+            h = df[(df["source"] == hsrc) & (df["region"] == k)].sort_values("date")
+            if not h.empty:
+                ax.plot(h["date"], h["swe_mm"], color="red", lw=2.2, marker="o", ms=3, label="SNOWCAP")
+            ax.set_title(REGIONS[k][0], fontsize=10)
+            ax.grid(alpha=0.3)
+            date_ticks(ax, dates)
+        axes[0].set_ylabel("domain mean SWE (mm)")
+        axes[0].legend(fontsize=7)
+        fig.suptitle(f"{what} members vs SNOWCAP per region, base {BASE_TIME:%Y-%m-%d} ({MODEL_LABEL})")
+        p = out_path("members", kind)
+        fig.savefig(p, dpi=DPI)
+        plt.close(fig)
+        print(f"regional member time series -> {p}")
 
-    snowcap, snowcap_files = load_snowcap()
-    ecx_src = find_source("ECXENS", [ECX_DIR], ECX_TEMPLATES, ECX_SCALE, ECX_MEAN_TEMPLATES)
-    if ecx_src is None:
-        raise SystemExit(f"no ECXENS forecast for {BASE_TIME:%Y-%m-%d} in {ECX_DIR}")
+
+# ---------------------------------------------------------------- one product (raw or adjusted ECXENS)
+def state_path():
+    return os.path.join(OUTDIR, f".state{PRED_TAG or '-raw'}.json")
+
+
+def read_state():
+    try:
+        with open(state_path()) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_state(st):
+    with open(state_path(), "w") as f:
+        json.dump(st, f, indent=2)
+
+
+def clear_product():
+    """Removes the result folders of the current product before it is done again, so nothing of the earlier run is left
+    (e.g. a driest or wettest member folder of another member number): adjusted: every <pred>-adjusted/; raw: every plain
+    <pred>/ (adjusted-vs-raw/ is handled in main)."""
+    if not os.path.isdir(OUTDIR):
+        return
+    gone = []
+    for d in sorted(os.listdir(OUTDIR)):
+        full = os.path.join(OUTDIR, d)
+        if not os.path.isdir(full) or d.startswith('.') or d == "adjusted-vs-raw":
+            continue
+        if d.endswith(ADJ_SUFFIX) == bool(PRED_TAG):
+            shutil.rmtree(full)
+            gone.append(d)
+    if gone:
+        print(f"removed the earlier {MODEL_LABEL} results: {', '.join(gone)}")
+
+
+def run_model(snowcap, snowcap_files, ecx_src, clms_on=False):
+    """Every result for one ECXENS product into OUTDIR (set_product first). Returns (ens mean loader, anything redone).
+    Predictions finished in an earlier run with the same ECXENS files are skipped (REDO does them again)."""
+    global SKIP_PNG
+    os.makedirs(OUTDIR, exist_ok=True)
+    st = read_state()
+    mtime = ecx_src.mtime()
+    forced = REDO or (REDO_ADJ and bool(PRED_TAG))
+    changed = forced or (st.get("mtime") is not None and abs(st["mtime"] - mtime) > 1)
+    SKIP_PNG = not changed      # first run with a state file: existing pngs are kept
+    if changed:
+        print(f"{MODEL_LABEL}: " + ("done again (redo)" if forced else "ECXENS files changed since the last run, done again"))
+        clear_product()
+    if changed or "mtime" not in st:
+        st = {"ecxens_file": os.path.basename(ecx_src.path), "mtime": mtime, "preds": {}}
+        write_state(st)
+    print(f"\n################ {MODEL_LABEL}, base {BASE_TIME:%Y-%m-%d}, ECXENS {os.path.basename(ecx_src.path)}, "
+          f"outputs in {OUTDIR}/<pred>{PRED_TAG}/")
     ens_src = find_source("ECENS", ECENS_DIRS, ECENS_TEMPLATES, ECENS_SCALE, ECENS_MEAN_TEMPLATES)
     e5_path = next((d + t.format(**_fill) for d in ECENS_DIRS for t in ECENS500_TEMPLATES
                     if os.path.exists(d + t.format(**_fill))), None)
@@ -1093,15 +1556,38 @@ def main():
     rank_csv = out_path("members", "ranking", ext="csv")
     ts_csv = out_path("members", "timeseries", ext="csv")
     has_members = len(ecx_src.members()) > 0
-    want_rank = has_members and ADD_EXTREME_MEMBERS and (RERANK or not os.path.exists(rank_csv))
-    want_ts = has_members and MEMBER_TIMESERIES and (RETIMESERIES or not os.path.exists(ts_csv))
+    want_rank = has_members and ADD_EXTREME_MEMBERS and (RERANK or changed or not os.path.exists(rank_csv))
+    want_ts = has_members and MEMBER_TIMESERIES and (RETIMESERIES or changed or not os.path.exists(ts_csv))
     want_ecx_mean = not ecx_src.has_mean_file
     want_ens_mean = ens_src is not None and not ens_src.has_mean_file
     rk = ts_df = ecx_mean = ens_mean = None
+    # raw ECENS member time series are the same for raw and adjusted ECXENS: kept in .ecens-members-timeseries.csv of the
+    # run folder and read from there while the ECENS files are unchanged, so the ECENS members are read only once
+    ens_cache = os.path.join(OUTDIR, ".ecens-members-timeseries.csv")
+    ens_meta = ens_cache[:-4] + ".json"
+    ens_ts = None
+    if want_ts and ens_src is not None and not REDO and os.path.exists(ens_cache):
+        try:
+            with open(ens_meta) as f:
+                ok_cache = abs(json.load(f).get("mtime", -1) - ens_src.mtime()) <= 1
+        except (OSError, ValueError):
+            ok_cache = False
+        if ok_cache:
+            ens_ts = pd.read_csv(ens_cache, parse_dates=["date"])
+            print(f"raw ECENS member time series from {os.path.basename(ens_cache)} (ECENS members not read again)")
     if want_rank or want_ts or want_ecx_mean or want_ens_mean:
+        scan_ens = None if (ens_ts is not None and not want_ens_mean) else ens_src
         print(f"\n=== reading all members (ranking {want_rank}, time series {want_ts}, "
-              f"ECXENS ens mean {want_ecx_mean}, ECENS ens mean {want_ens_mean}) ===")
-        rk, ts_df, ecx_mean, ens_mean = scan_members(ecx_src, ens_src, snowcap, want_ts, want_ecx_mean, want_ens_mean)
+              f"ECXENS ens mean {want_ecx_mean}, ECENS ens mean {want_ens_mean}, ECENS members {scan_ens is not None}) ===")
+        rk, ts_df, ecx_mean, ens_mean = scan_members(ecx_src, scan_ens, snowcap, want_ts, want_ecx_mean, want_ens_mean)
+        if ts_df is not None:
+            ens_rows = ts_df["source"].isin(["ECENS", "SNOWCAP_ECENS"])
+            if ens_ts is not None:
+                ts_df = pd.concat([ts_df[~ens_rows], ens_ts], ignore_index=True)
+            elif ens_src is not None and ens_rows.any():
+                ts_df[ens_rows].to_csv(ens_cache, index=False, float_format="%.4f")
+                with open(ens_meta, "w") as f:
+                    json.dump({"mtime": ens_src.mtime(), "ecens_file": os.path.basename(ens_src.path)}, f)
     if has_members and ADD_EXTREME_MEMBERS:
         if rk is None and os.path.exists(rank_csv):
             print(f"Reusing member ranking: {rank_csv}")
@@ -1118,6 +1604,8 @@ def main():
         if ts_df is None and os.path.exists(ts_csv):
             print(f"Reusing member time series: {ts_csv}")
             ts_df = pd.read_csv(ts_csv, parse_dates=["date"])
+            if not todo(out_path("members", "ecxens-timeseries")):
+                ts_df = None    # csv and plots there already
         elif ts_df is not None:
             ts_df.to_csv(ts_csv, index=False, float_format="%.4f")
         if ts_df is not None:
@@ -1150,16 +1638,39 @@ def main():
                           ens_loader(m), f"ECENS member {m}", lambda: None))
             print(f"{label} member by {RANK_BY}: {m}")
 
-    with open(os.path.join(OUTDIR, f"{PREFIX}_run-info.json"), "w") as f:
-        json.dump({"model": MODEL, "base_time": f"{BASE_TIME:%Y-%m-%d %H:%M}", "region": REGION,
-                   "ecxens_file": os.path.basename(ecx_src.path), "ecxens_members": ecx_src.members(),
-                   "ecens_file": os.path.basename(ens_src.path) if ens_src is not None else None,
-                   "ecens500_file": os.path.basename(e5_path) if e5_path else None,
-                   "snowcap_file": [os.path.basename(p) for p in snowcap_files],
-                   "preds": [p[0] for p in preds]}, f, indent=2)
+    if PRED_TAG:   # adjusted product: names say so (shown in SnowLook and in the figure titles)
+        preds = [(lab, nm.replace("ECXENS", "ECXENS adjusted", 1)) + tuple(rest) for lab, nm, *rest in preds]
+    # one run-info for both products: the keys of the product run now are replaced, the other's kept
+    ri_path = os.path.join(OUTDIR, f"{PREFIX}_run-info.json")
+    try:
+        with open(ri_path) as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        info = {}
+    key = "ecxens_adjusted" if PRED_TAG else "ecxens"
+    info.update({"model": MODEL, "base_time": f"{BASE_TIME:%Y-%m-%d %H:%M}", "region": REGION,
+                 f"{key}_file": os.path.basename(ecx_src.path), f"{key}_members": ecx_src.members(),
+                 "ecens_file": os.path.basename(ens_src.path) if ens_src is not None else None,
+                 "ecens500_file": os.path.basename(e5_path) if e5_path else None,
+                 "snowcap_file": [os.path.basename(p) for p in snowcap_files],
+                 "regions": {k: {"name": v[0], "country": v[1], "lat_from": v[2], "lat_to": v[3]} for k, v in REGIONS.items()}})
+    other = [x for x in info.get("preds", []) if x.endswith(ADJ_SUFFIX) != bool(PRED_TAG)]
+    info["preds"] = other + [tagged(p[0]) for p in preds]
+    with open(ri_path, "w") as f:
+        json.dump(info, f, indent=2)
 
     all_dfs = []
+    redone = False
     for label, name, load_ecx, load_ens, ens_name, load_e5 in preds:
+        use_clms = clms_on and label == "ensmean" and not PRED_TAG
+        prev = st["preds"].get(label)
+        if prev is not None and prev.get("clms") == use_clms:
+            print(f"\n=== {name}: done in an earlier run, skipped ('redo' as the third argument does it again) ===")
+            df = _read(prev_path(tagged(label), "ecxens-metrics", "csv"))
+            if df is not None:
+                all_dfs.append(df.assign(pred=label))
+            continue
+        redone = True
         print(f"\n=== {name} ===")
         ecx = load_ecx()
         ens = load_ens()
@@ -1174,10 +1685,12 @@ def main():
             e5 = None
         if e5 is not None:
             e5 = check_ecens(e5, snowcap, label=f"{ens_name} remapped to {FINE_GRID}", mask=False)
-        df = validate(ecx, snowcap, label, name, ens=ens, ens_name=ens_name, ens500=e5, full=(label == "ensmean"))
+        df = validate(ecx, snowcap, label, name, ens=ens, ens_name=ens_name, ens500=e5, full=(label == "ensmean"), clms=use_clms)
         if df is not None:
             all_dfs.append(df.assign(pred=label))
         del ecx, ens, e5
+        st["preds"][label] = {"clms": use_clms}
+        write_state(st)     # after every prediction, so a crash continues from here
 
     if all_dfs:
         combined = pd.concat(all_dfs, ignore_index=True)
@@ -1185,7 +1698,246 @@ def main():
         p = out_path("all", "ecxens-metrics", ext="csv")
         combined[cols].to_csv(p, index=False, float_format="%.4f")
         print(f"\nCombined scores: {p}")
-    write_manifest()
+    return preds[0][2], redone
+
+
+# ---------------------------------------------------------------- adjusted against raw
+def _read(path, **kw):
+    return pd.read_csv(path, **kw) if os.path.exists(path) else None
+
+
+def compare_adjusted(snowcap, load_raw, load_adj):
+    """Adjusted ECXENS against raw ECXENS (their csv files in <pred>/ and <pred>-adjusted/) into adjusted-vs-raw/."""
+    pred = "adjusted-vs-raw"
+    rn, an = f"ECXENS raw ({MODEL})", f"ECXENS adjusted ({MODEL})"
+    tag = f"ens mean, SWE {FINE_GRID}, base {BASE_TIME:%Y-%m-%d}"
+    print(f"\n=== {an} against {rn} ===")
+
+    # ---- scores per lead day
+    mr = _read(prev_path("ensmean", "ecxens-metrics", "csv"))
+    ma = _read(prev_path("ensmean-adjusted", "ecxens-metrics", "csv"))
+    if mr is not None and ma is not None:
+        m = mr.merge(ma, on=["date", "lead_day"], suffixes=("_raw", "_adj"))
+        m["skill_mse_adj_vs_raw"] = 1 - m["rmse_adj"] ** 2 / m["rmse_raw"] ** 2
+        m["skill_mse_adj_vs_ecens500"] = (1 - m["rmse_adj"] ** 2 / m["ecens500_rmse_raw"] ** 2) if "ecens500_rmse_raw" in m else np.nan
+        keep = ["date", "lead_day"] + [f"{c}_{v}" for c in ["bias", "mae", "rmse", "r", "kge", "snow_bias", "snow_rmse", "snow_kge",
+                                                             "ecens500_bias", "ecens500_mae", "ecens500_rmse", "ecens500_kge"]
+                                       for v in ("raw", "adj") if f"{c}_{v}" in m and not (c.startswith("ecens500") and v == "adj")]
+        keep += ["skill_mse_adj_vs_raw", "skill_mse_adj_vs_ecens500"]
+        m[keep].to_csv(out_path(pred, "adjusted-vs-raw-metrics", ext="csv"), index=False, float_format="%.4f")
+        L = m["lead_day"]
+        has5 = "ecens500_rmse_raw" in m and m["ecens500_rmse_raw"].notna().any()
+        e5 = "ECENS ens mean remapped"
+        for sc, title, zero in [("rmse", "RMSE (mm)", False), ("bias", "Bias, forecast minus SNOWCAP (mm)", True),
+                                ("mae", "MAE (mm)", False), ("kge", "KGE", False)]:
+            series = [(L, m[f"{sc}_raw"], "o-", rn), (L, m[f"{sc}_adj"], "s-", an)]
+            if f"snow_{sc}_raw" in m:
+                series += [(L, m[f"snow_{sc}_raw"], "o--", f"{rn}, snow px"), (L, m[f"snow_{sc}_adj"], "s--", f"{an}, snow px")]
+            if has5 and f"ecens500_{sc}_raw" in m:
+                series.append((L, m[f"ecens500_{sc}_raw"], "^:", e5))
+            lead_plot(out_path(pred, f"adjusted-vs-raw-score-{sc}"), f"{title}\n{tag}", series, zero=zero,
+                      legend_kw=dict(fontsize=8))
+        lead_plot(out_path(pred, "adjusted-vs-raw-score-skill"), f"MSE skill of ECXENS adjusted (1 = perfect, 0 = as the reference)\n{tag}",
+                  [(L, m["skill_mse_adj_vs_raw"], "o-", f"against {rn}")]
+                  + ([(L, m["skill_mse_adj_vs_ecens500"], "s--", f"against {e5}")] if has5 else []), zero=True)
+        cols = [c for c in ["lead_day", "bias_raw", "bias_adj", "rmse_raw", "rmse_adj", "ecens500_rmse_raw", "skill_mse_adj_vs_raw"] if c in m]
+        print(m[cols].round(2).to_string(index=False))
+    else:
+        print("ens mean scores of raw or adjusted missing (no SNOWCAP days?), no lead day comparison")
+
+    # ---- domain mean time series
+    tr = _read(prev_path("ensmean", "domain-mean-timeseries", "csv"), parse_dates=["date"])
+    ta = _read(prev_path("ensmean-adjusted", "domain-mean-timeseries", "csv"), parse_dates=["date"])
+    if tr is not None and ta is not None:
+        t = tr.merge(ta[["date", "ecxens"]].rename(columns={"ecxens": "ecxens_adjusted"}), on="date", how="outer").sort_values("date")
+        t.to_csv(out_path(pred, "adjusted-vs-raw-domain-mean-timeseries", ext="csv"), index=False, float_format="%.4f")
+        fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
+        for col, lab, sty in [("ecxens", rn, dict(color="tab:blue", lw=2, marker="o")),
+                              ("ecxens_adjusted", an, dict(color="tab:green", lw=2, marker="D")),
+                              ("ecens500", "ECENS ens mean remapped", dict(color="tab:orange", lw=2, ls="--", marker="s")),
+                              ("snowcap", "SNOWCAP", dict(color="red", lw=2.5, marker="o")),
+                              ("clms", "CLMS (satellite, CLMS pixels only)", dict(color="tab:purple", lw=2, ls="-.", marker="^"))]:
+            if col in t and t[col].notna().any():
+                d = t.dropna(subset=[col])
+                ax.plot(d["date"], d[col], label=lab, **sty)
+        dates = sorted(t["date"].unique())
+        ax.set_xticks(dates)
+        ax.set_xticklabels([f"{pd.Timestamp(x):%m-%d}\n+{(pd.Timestamp(x) - BASE_TIME).days} d" for x in dates], fontsize=8)
+        ax.set_ylabel("domain mean SWE (mm)")
+        ax.set_title(f"Domain mean SWE, SNOWCAP domain\n{tag}")
+        ax.grid(alpha=0.3)
+        ax.legend()
+        fig.savefig(out_path(pred, "adjusted-vs-raw-domain-mean-timeseries"), dpi=DPI)
+        plt.close(fig)
+
+    # ---- regions: time series and scores
+    rr = _read(prev_path("ensmean", "domain-mean-timeseries-regions", "csv"), parse_dates=["date"])
+    ra = _read(prev_path("ensmean-adjusted", "domain-mean-timeseries-regions", "csv"), parse_dates=["date"])
+    if rr is not None and ra is not None:
+        r = rr.merge(ra[["date", "region", "ecxens"]].rename(columns={"ecxens": "ecxens_adjusted"}), on=["date", "region"], how="outer")
+        keys = [k for k in REGIONS if k in set(r["region"])]
+        fig, axes = region_grid(keys)
+        dates = sorted(r["date"].unique())
+        for ax, k in zip(axes, keys):
+            d = r[r["region"] == k].sort_values("date")
+            for col, lab, sty in [("ecxens", "raw", dict(color="tab:blue", lw=1.8, marker="o", ms=3)),
+                                  ("ecxens_adjusted", "adjusted", dict(color="tab:green", lw=1.8, marker="D", ms=3)),
+                                  ("ecens500", "ECENS remapped", dict(color="tab:orange", lw=1.8, ls="--", marker="s", ms=3)),
+                                  ("snowcap", "SNOWCAP", dict(color="red", lw=2.2, marker="o", ms=3))]:
+                if col in d and d[col].notna().any():
+                    ax.plot(d["date"], d[col], label=lab, **sty)
+            ax.set_title(REGIONS[k][0], fontsize=10)
+            ax.grid(alpha=0.3)
+            date_ticks(ax, dates)
+        axes[0].set_ylabel("domain mean SWE (mm)")
+        axes[0].legend(fontsize=7)
+        fig.suptitle(f"Domain mean SWE per region, ECXENS raw and adjusted, {tag}")
+        fig.savefig(out_path(pred, "adjusted-vs-raw-timeseries-regions"), dpi=DPI)
+        plt.close(fig)
+    sr = _read(prev_path("ensmean", "regions-metrics", "csv"))
+    sa = _read(prev_path("ensmean-adjusted", "regions-metrics", "csv"))
+    if sr is not None and sa is not None:
+        keys = [k for k in REGIONS if k in set(sr["region"]) | set(sa["region"])]
+        gr = sr.groupby("region").mean(numeric_only=True).reindex(keys)
+        ga = sa.groupby("region").mean(numeric_only=True).reindex(keys)
+        has5 = "ecens500_rmse" in gr and gr["ecens500_rmse"].notna().any()
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), constrained_layout=True)
+        x = np.arange(len(keys))
+        nb = 3 if has5 else 2
+        wbar = 0.8 / nb
+        names = [REGIONS[k][0] for k in keys]
+        for ax, (sc, title) in zip(axes[:2], [("rmse", "RMSE (mm)"), ("bias", "bias, forecast minus SNOWCAP (mm)")]):
+            ax.bar(x - wbar * (nb - 1) / 2, gr[sc], wbar, label="ECXENS raw", color="tab:blue")
+            ax.bar(x - wbar * (nb - 1) / 2 + wbar, ga[sc], wbar, label="ECXENS adjusted", color="tab:green")
+            if has5:
+                ax.bar(x + wbar, gr[f"ecens500_{sc}"], wbar, label="ECENS remapped", color="tab:orange")
+            ax.set_xticks(x)
+            ax.set_xticklabels(names, rotation=35, ha="right", fontsize=8)
+            ax.set_title(title)
+            ax.axhline(0, color="k", lw=0.6)
+            ax.grid(alpha=0.3, axis="y")
+        axes[0].legend(fontsize=8)
+        sk = 1 - ga["rmse"] ** 2 / gr["rmse"] ** 2      # from the mean RMSE over the lead days
+        ax = axes[2]
+        ax.bar(x, sk, 0.7, color=["tab:green" if v > 0 else "tab:red" for v in sk])
+        ax.set_title("MSE skill of adjusted vs raw (from the mean RMSE)\n(above 0 = adjusting helped)")
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=35, ha="right", fontsize=8)
+        ax.axhline(0, color="k", lw=0.6)
+        ax.grid(alpha=0.3, axis="y")
+        fig.suptitle(f"Scores per region, means over the lead days, {tag}")
+        fig.savefig(out_path(pred, "adjusted-vs-raw-regions-scores"), dpi=DPI)
+        plt.close(fig)
+        tab = pd.DataFrame({"rmse_raw": gr["rmse"], "rmse_adj": ga["rmse"], "bias_raw": gr["bias"], "bias_adj": ga["bias"],
+                            "skill_adj_vs_raw": sk}).rename(index=lambda k: REGIONS[k][0])
+        tab.to_csv(out_path(pred, "adjusted-vs-raw-regions-scores", ext="csv"), float_format="%.4f")
+        print(tab.round(2).to_string())
+
+    # ---- member spread of both against SNOWCAP (whole domain)
+    mr = _read(prev_path("members", "timeseries", "csv"), parse_dates=["date"])
+    ma = _read(prev_path("members-adjusted", "timeseries", "csv"), parse_dates=["date"])
+    if mr is not None and ma is not None:
+        def sel(df, src):
+            d = df[df["source"] == src]
+            return d[d["region"] == "all"] if "region" in d else d
+        fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
+        for df, lab, col in [(mr, "ECXENS raw", "tab:blue"), (ma, "ECXENS adjusted", "tab:green")]:
+            d = sel(df, "ECXENS")
+            if d.empty:
+                continue
+            q = d.groupby("date")["swe_mm"].quantile([0.05, 0.5, 0.95]).unstack()
+            ax.fill_between(q.index, q[0.05], q[0.95], color=col, alpha=0.2, label=f"{lab} members 5 to 95 %")
+            ax.plot(d.groupby("date")["swe_mm"].mean(), color=col, lw=2, label=f"{lab} member mean")
+        h = sel(mr, "SNOWCAP_ECXENS").sort_values("date")
+        if not h.empty:
+            ax.plot(h["date"], h["swe_mm"], color="red", lw=2.5, marker="o", label="SNOWCAP")
+        ax.set_ylabel("domain mean SWE (mm)")
+        ax.set_title(f"ECXENS members raw and adjusted vs SNOWCAP, SNOWCAP domain, base {BASE_TIME:%Y-%m-%d}")
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+        fig.savefig(out_path(pred, "adjusted-vs-raw-members-timeseries"), dpi=DPI)
+        plt.close(fig)
+
+    # ---- maps: where adjusting helped, and the mean adjustment
+    if not todo(out_path(pred, "adjustment-mean")) and not todo(out_path(pred, "adjusted-vs-raw-mae-gain")):
+        print(f"comparison maps there already, outputs in {os.path.join(OUTDIR, pred)}/")
+        return
+    raw, adj = load_raw(), load_adj()
+    if raw is None or adj is None:
+        return
+    adj = match_grid(raw, adj, "ECXENS adjusted")
+    sc = match_snowcap(raw, snowcap) if snowcap is not None else None
+    sc_times = sc.valid_time.values if sc is not None else np.array([], dtype="datetime64[ns]")
+    shape = (raw.sizes["latitude"], raw.sizes["longitude"])
+    sum_a, cnt_a, sum_g, cnt_g = np.zeros(shape), np.zeros(shape), np.zeros(shape), np.zeros(shape)
+    times = [t for t in raw.valid_time.values if t in set(adj.valid_time.values)]
+    for t in times:
+        a = adj.sel(valid_time=t).values.astype("float64")
+        x = raw.sel(valid_time=t).values.astype("float64")
+        ok = np.isfinite(a) & np.isfinite(x)
+        sum_a[ok] += (a - x)[ok]
+        cnt_a[ok] += 1
+        if t in sc_times:
+            o = sc.sel(valid_time=t).values.astype("float64")
+            v = ok & np.isfinite(o)
+            sum_g[v] += (np.abs(a - o) - np.abs(x - o))[v]
+            cnt_g[v] += 1
+    extent = grid_extent(raw)
+    aspect = 1.0 / np.cos(np.deg2rad(raw.latitude.values.mean()))
+    lines = get_lines(extent)
+    period = f"{pd.Timestamp(times[0]):%Y-%m-%d} to {pd.Timestamp(times[-1]):%Y-%m-%d}" if times else ""
+    with np.errstate(invalid="ignore", divide="ignore"):
+        save_bias_map(out_path(pred, "adjustment-mean"), np.where(cnt_a > 0, sum_a / cnt_a, np.nan), extent, aspect, lines,
+                      f"Mean adjustment, ECXENS adjusted minus raw SWE ({FINE_GRID})\n{period}", label="mm")
+        if cnt_g.any():
+            save_bias_map(out_path(pred, "adjusted-vs-raw-mae-gain"), np.where(cnt_g > 0, sum_g / cnt_g, np.nan), extent, aspect, lines,
+                          f"|adjusted bias| minus |raw bias| vs SNOWCAP SWE ({FINE_GRID})\n{period}, {int(cnt_g.max())} SNOWCAP days",
+                          label="mm, negative = adjusting helped")
+    print(f"comparison done, outputs in {os.path.join(OUTDIR, pred)}/")
+
+
+# ---------------------------------------------------------------- main
+def main():
+    global SKIP_PNG
+    os.makedirs(OUTDIR, exist_ok=True)
+    print(f"model {MODEL}, base {BASE_TIME:%Y-%m-%d}, outputs in {OUTDIR}" + ("  (redo: everything again)" if REDO else ""))
+    snowcap, snowcap_files = load_snowcap()
+    clms_on = clms_available()
+    loaders = {}
+    redone = False
+    raw_src = find_source("ECXENS", [ECX_DIR], ECX_TEMPLATES, ECX_SCALE, ECX_MEAN_TEMPLATES)
+    if RUN_RAW:
+        set_product(False)
+        if raw_src is None:
+            print(f"no raw ECXENS forecast for {BASE_TIME:%Y-%m-%d} in {ECX_DIR}, raw left out")
+        else:
+            loaders["raw"], r = run_model(snowcap, snowcap_files, raw_src, clms_on)
+            redone |= r
+    if RUN_ADJUSTED:
+        set_product(True)
+        adj_src = find_source("ECXENS", [ECX_DIR], ADJ_TEMPLATES, ECX_SCALE, ADJ_MEAN_TEMPLATES)
+        if adj_src is None:
+            print(f"no adjusted ECXENS ({ADJ_TEMPLATES[0].format(**_fill).format(m='<n>')}) in {ECX_DIR}, adjusted left out; "
+                  f"run adjust-snow-ecxens.py and prep-ecxens-validation.sh {BASE_TAG} first")
+        else:
+            loaders["adj"], r = run_model(snowcap, snowcap_files, adj_src)
+            redone |= r
+    set_product(False)
+    SKIP_PNG = not (REDO or REDO_ADJ or redone)     # new results: the comparison is drawn again, from an empty folder
+    cmp_dir = os.path.join(OUTDIR, "adjusted-vs-raw")
+    if not SKIP_PNG and os.path.isdir(cmp_dir):
+        shutil.rmtree(cmp_dir)
+        print("removed the earlier adjusted-vs-raw results")
+    if COMPARE_ADJUSTED and os.path.exists(prev_path("ensmean", "info", "json")) and os.path.exists(prev_path("ensmean-adjusted", "info", "json")):
+        def load_from(src):
+            return (lambda: src.load("ensmean")) if src is not None and src.has_mean_file else (lambda: None)
+        if "adj" not in loaders:
+            loaders["adj"] = load_from(find_source("ECXENS", [ECX_DIR], ADJ_TEMPLATES, ECX_SCALE, ADJ_MEAN_TEMPLATES))
+        compare_adjusted(snowcap, loaders.get("raw") or load_from(raw_src), loaders["adj"])
+    if MANIFEST:
+        write_manifest()
+    if not loaders:
+        raise SystemExit(f"no ECXENS forecast for {BASE_TIME:%Y-%m-%d} in {ECX_DIR}")
 
 
 if __name__ == "__main__":
