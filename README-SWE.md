@@ -4,7 +4,9 @@ This document describes the workflow and requirements for combining Snowcap SWE 
 
 The trained model downscales and corrects ECMWF forecasts to daily 500 m SWE: the 15 day ensemble (ECXENS) and the seasonal forecast of 215 days (ECXSF). Results are shown in the SnowLook dashboard ([snowlook.cryo-scope.eu](https://snowlook.cryo-scope.eu)).
 
-Work done in the [CryoSCOPE](https://cryoscope-project.eu/) project at the Finnish Meteorological Institute (FMI).
+Work done in the [CryoSCOPE](https://cryoscope-project.eu/) project.
+
+Anni Kröger (2026), Finnish Meteorological Institute (FMI)
 
 ## Contents
 
@@ -19,7 +21,6 @@ Work done in the [CryoSCOPE](https://cryoscope-project.eu/) project at the Finni
 9. [SnowLook dashboard](#snowlook-dashboard)
 10. [Model editions](#model-editions)
 11. [Requirements](#requirements)
-12. [Scripts](#scripts)
 
 ## Target: SNOWCAP SWE and snow depth
 
@@ -119,7 +120,7 @@ Features of the final model swe-ml-2. Latitude and longitude are read (for the p
 
 ## Training
 
-Script: `xgb-train-cryoscope-swe.py <optuna_tag>`
+<!-- Script: `xgb-train-cryoscope-swe.py <optuna_tag>` -->
 
 - objective `reg:tweedie` (log link: predictions are always positive and many zeros are handled), `tweedie_variance_power` tuned between 1.1 and 1.9
 - split by snow season (1 Sep to 31 Aug, labelled by the start year): validation seasons 2018 (low snow winter 2018/19) and 2021 (high snow winter 2021/22), every other season is training
@@ -143,7 +144,7 @@ The validation scores written by the training script are optimistic, because the
 
 ## Independent validation
 
-Script: `xgb-validate-cryo-swe.py <optuna_tag>`, data fetched with `ts-snowmodel-valid.py`
+<!-- Script: `xgb-validate-cryo-swe.py <optuna_tag>`, data fetched with `ts-snowmodel-valid.py` -->
 
 - 10 000 validation locations per domain, never used in training
 - baselines: ERA5-Land SWE and SNOWCAP climatology
@@ -154,14 +155,16 @@ TODO: results of the final model.
 
 ## Predictions
 
-|product|forcing|length|grid|domain|scripts|
-|:-|:-|:-|:-|:-|:-|
-|ECXENS|ECMWF ensemble (ECENS), 50 members|15 days, daily|500 m|Scandinavia, Alps|TODO|
-|ECXSF|ECMWF seasonal forecast (ECSF), 51 members|215 days|2.8 km (0.025°)|Scandinavia, Alps|`run-xgb-predict-swe-sf.sh`, `xgb-predict-swe-sf.py`|
-|ECXSF 9 km|ECMWF seasonal forecast|215 days|9 km|Europe|TODO|
+|product|forcing|length|grid|domain|
+|:-|:-|:-|:-|:-|
+|ECXENS|ECMWF ensemble (ECENS), 50 members|15 days, daily|500 m|Scandinavia, Alps|
+|ECXSF|ECMWF seasonal forecast (ECSF), 51 members|215 days|2.8 km (0.025°)|Scandinavia, Alps|
+|ECXSF 9 km|ECMWF seasonal forecast|215 days|9 km|Europe|
+
+<!-- scripts: ECXENS TODO; ECXSF `run-xgb-predict-swe-sf.sh`, `xgb-predict-swe-sf.py`; ECXSF 9 km TODO -->
 
 - the first forecast day's sd lag comes from ERA5-Land sd of the start day
-- the prediction scripts take the feature list of the model from its hyperparams json
+- the predictions take the feature list of the model from its hyperparams json
 - the newest runs are on the SmartMet server (sm.cryo-scope.eu) as WMS layers and time series
 
 ## Forecast validation
@@ -170,22 +173,28 @@ Past forecasts of chosen start dates (cases) are validated against SNOWCAP. The 
 
 **ECXENS, 15 days, 500 m**
 
+<!--
 ```
 ./prep-ecxens-validation.sh 20191210
 python cryo-ecxens-performance.py 20191210 swe-ml-2
 ```
+prep-ecxens-validation.sh: cuts SNOWCAP to the forecast days, splits ECENS and ECXENS to members, makes the ensemble means and remaps the ECENS ensemble mean to the SNOWCAP 500 m grid
+cryo-ecxens-performance.py: the validation below
+-->
 
-- `prep-ecxens-validation.sh` cuts SNOWCAP to the forecast days, splits ECENS and ECXENS to members, makes the ensemble means and remaps the ECENS ensemble mean to the SNOWCAP 500 m grid
-- `cryo-ecxens-performance.py` writes daily maps (raw ECENS 9 km, ECENS remapped 500 m, ECXENS, SNOWCAP), bias maps, scores per lead day, the domain mean time series and the member ranking (driest, wettest) to `ecxens_validation/<model>/<start date>/<prediction>/`
+- input: SNOWCAP of the forecast days, ECENS and ECXENS members and ensemble means, and the ECENS ensemble mean remapped to the SNOWCAP 500 m grid
+- output: daily maps (raw ECENS 9 km, ECENS remapped 500 m, ECXENS, SNOWCAP), bias maps, scores per lead day, the domain mean time series and the member ranking (driest, wettest), in `ecxens_validation/<model>/<start date>/<prediction>/`
 
 **ECXSF, seasonal**
 
-- 2.8 km: `xgb-validate-swe-sf.py`, monthly means against SNOWCAP, results in `validation_sf/<model>/<start date>/<prediction>/`
-- 9 km: `xgb-validate-swe-sf-9km.py`, monthly means against ERA5-Land per region, results in `validation_sf9km/`
+- 2.8 km: monthly means against SNOWCAP, results in `validation_sf/<model>/<start date>/<prediction>/`
+- 9 km: monthly means against ERA5-Land per region, results in `validation_sf9km/`
+<!-- scripts: 2.8 km `xgb-validate-swe-sf.py`, 9 km `xgb-validate-swe-sf-9km.py` -->
 
 ## SnowLook dashboard
 
-Streamlit app `snowlook/snowlook.py`, served at [snowlook.cryo-scope.eu](https://snowlook.cryo-scope.eu) from a docker container (see `snowlook/snowlook_setup.md`).
+Streamlit app, served at [snowlook.cryo-scope.eu](https://snowlook.cryo-scope.eu) from a docker container.
+<!-- app `snowlook/snowlook.py`, setup `snowlook/snowlook_setup.md` -->
 
 |section|pages|
 |:-|:-|
@@ -215,6 +224,7 @@ Streamlit app `snowlook/snowlook.py`, served at [snowlook.cryo-scope.eu](https:/
 - SnowLook: streamlit, plotly, folium, streamlit-folium, requests, pyarrow, pillow
 - access to the SmartMet timeseries API and the static rasters
 
+<!--
 ## Scripts
 
 |script|description|
@@ -232,3 +242,4 @@ Streamlit app `snowlook/snowlook.py`, served at [snowlook.cryo-scope.eu](https:/
 |`xgb-validate-swe-sf.py`||
 |`xgb-validate-swe-sf-9km.py`||
 |`snowlook/snowlook.py`||
+-->
