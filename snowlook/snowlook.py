@@ -84,8 +84,8 @@ FC_ORDER=['ensmean','member01','wettest','driest']
 # region: 'region' in run_info.json, else a region suffix on the model folder (FIN5noclim_Alps, FIN5noclim_alps, FIN5noclim-Alps),
 #   else FC_DEFAULT_REGION; e.g. validation/FIN5noclim_Alps/20230210/ is model FIN5noclim, region Alps
 FC_LEGACY_MODEL='FINmulti'
-# simpler SWE predictions (past) 15 days page (final model): no 'scores per start date, chart' expander, and below the maps only
-# Ensemble members (domain mean plots of every member) and Period summary; the compare page keeps everything
+# simpler SWE predictions (past) 15 days page (final model): no 'scores per start date, chart' expander, and the ensemble members
+# tab with only the domain mean plots of every member; every result of cryo-ecxens-performance.py is still shown
 FC_SIMPLE=True
 FC_DEFAULT_REGION='Scandinavia'
 FC_REGIONS={'alps':'Alps','scandi':'Scandinavia','scandinavia':'Scandinavia'}   # folder suffix / run_info region (lower case) -> shown name
@@ -110,22 +110,38 @@ def default_model(models,first=PROD_MODEL):
     ed=st.session_state.get('edition_keep')
     return ed if ed in models else models[0]
 FC_SKIP_DIRS={'app_cache','tmp','__pycache__'}   # folders under validation/ that are never models, start dates or predictions
-FC_NOT_PRED={'members','all'}   # run subfolders of cryo-ecxens-performance.py that hold plots over all members / predictions, not one prediction
+FC_ADJ='-adjusted'   # ECXENS adjusted to SNOWCAP (adjust-snow-ecxens.py): cryo-ecxens-performance.py writes it as <pred>-adjusted/ in the same run
+FC_ADJ_ERA5L='-adjusted-era5l'   # ECXENS adjusted to ERA5-Land: <pred>-adjusted-era5l/
+# adjusted products: prediction suffix -> (short label, name, comparison folder of cryo-ecxens-performance.py, colour)
+FC_ADJ_TAGS={FC_ADJ:('adjusted','ECXENS adjusted','adjusted-vs-raw','#2ca02c'),
+             FC_ADJ_ERA5L:('adjusted ERA5-Land','ECXENS adjusted ERA5-Land','adjusted-era5l-vs-raw','#8c564b')}
+FC_TAG_ORDER=['',FC_ADJ,FC_ADJ_ERA5L]   # raw first, then the adjusted products
+FC_CMP_DIR='adjusted-vs-raw'   # adjusted against raw ECXENS figures of cryo-ecxens-performance.py (SNOWCAP adjusted)
+FC_CMP_DIRS=[v[2] for v in FC_ADJ_TAGS.values()]
+# run subfolders of cryo-ecxens-performance.py that hold plots over all members / predictions, not one prediction
+FC_NOT_PRED={'members','all'}|{x+t for t in FC_ADJ_TAGS for x in ('members','all')}|set(FC_CMP_DIRS)
 # file names: the new script writes <model>_<start date>_<prediction>_<kind>[_<valid date>].<ext>; old stem -> new kind.
 # fc_file() tries the new name first, then the old one, so both layouts work
 FC_NEW={'swe_metrics':'ecxens-metrics','pred_info':'info','swe_legend':'swe-legend',
         'swe_map_ecens':'ecens-swe','swe_map_ecxens':'ecxens-swe','swe_map_hkl':'snowcap-swe',
         'swe_bias':'ecxens-bias','swe_ecens_bias':'ecens-bias','swe_bias_gain':'ecxens-vs-ecens-gain',
-        'swe_density_scatter':'ecxens-density-scatter'}
+        'swe_density_scatter':'ecxens-density-scatter',
+        # ECENS ens mean remapped to the SNOWCAP 500 m grid (ensmean folder only)
+        'swe_map_ecens500':'ecens500-swe','swe_ecens500_bias':'ecens500-bias',
+        # CLMS SWE (satellite, get-clms-swe.sh): raw 5 km and remapped to the SNOWCAP 500 m grid (raw ECXENS ens mean folder)
+        'swe_map_clms':'clms-swe','swe_map_clms500':'clms500-swe'}
 # run level files: old name -> (subfolder, new kind)
 FC_RUN_NEW={'run_info':('','run-info'),'member_ranking':('members','ranking'),
-            'swe_members_ecxens':('members','ecxens-timeseries'),'swe_members_ecens':('members','ecens-timeseries')}
+            'swe_members_ecxens':('members','ecxens-timeseries'),'swe_members_ecens':('members','ecens-timeseries'),
+            'member_ranking_adj':('members'+FC_ADJ,'ranking'),'swe_members_ecxens_adj':('members'+FC_ADJ,'ecxens-timeseries'),
+            'swe_members_ecxens_adj_era5l':('members'+FC_ADJ_ERA5L,'ecxens-timeseries')}
 # period figures: shown name -> (new kinds, each its own png, old combined png)
 FC_PERIOD_FIGS={'mean bias and RMSE maps':(['ecxens-mean-bias','ecxens-rmse'],'swe_bias_mean_rmse.png'),
                 'ECENS bias and MAE change vs ECENS':(['ecens-mean-bias','ecxens-vs-ecens-mae-gain'],'swe_ecens_bias_gain_mean.png'),
+                'ECENS remapped to 500 m: bias, RMSE and MAE change':(['ecens500-mean-bias','ecens500-rmse','ecxens-vs-ecens500-mae-gain'],None),
                 'pixel density, all days pooled':(['ecxens-density-scatter'],'swe_density_scatter.png'),
                 'scores per lead day':(['ecxens-score-bias-mae','ecxens-score-rmse','ecxens-score-kge','ecxens-score-csi',
-                                        'ecxens-score-pod-far','ecxens-score-volume','ecxens-vs-ecens-skill'],'swe_scores_vs_lead.png')}
+                                        'ecxens-score-pod-far','ecxens-score-volume','ecxens-vs-ecens500-skill','ecxens-vs-ecens-skill'],'swe_scores_vs_lead.png')}
 # names shown when a folder has no pred_info.json; member1, member01, ... are named 'ECXENS member N' automatically
 FC_NAMES={'ensmean':'ECXENS ens mean','wettest':'ECXENS wettest member','driest':'ECXENS driest member'}
 MILD_BIAS=50   # mm, same as MILD_BIAS in the forecast validation script (soft bias colours up to this, strong beyond)
@@ -238,7 +254,7 @@ def case_sources(table,region):
     if region=='Europe': return {f'source {r}':table.get(r,{}) for r in ('Scandinavia','Alps')}
     return {'source':table.get(region,{})}
 # predictions whose daily maps are collapsed (opened with a click) on the ECXENS (15 days, compare 10 and 15 days) pages
-FC_COLLAPSED={'wettest','driest'}
+FC_COLLAPSED={'wettest','driest'}   # also every single member (member01, ...): maps behind a closed expander, ens mean open
 
 # training locations figures in the snowmodel directory: area -> file name prefix; shown on the Training and Training explorer pages
 TRAIN_LOC_FIGS={'Scandinavia':'dem+fch_merged_fch25','Alps':'dem+fch_merged_alps_fch2'}
@@ -265,9 +281,6 @@ OVERVIEW_LOGOS=[('cryo.png',260,'https://cryoscope-project.eu/','cryoscope-proje
                 ('snowcap.png',120,'https://snowcap.info','snowcap.info'),
                 ('fmi.png',300,'https://trafficability.xyz','trafficability.xyz')]
 OVERVIEW_FUNDING=('cryoscope.png',760)
-# SnowLook eye above the title of the Overview page: the app icon (eye with a snowflake, no text) and its width in pixels
-OVERVIEW_ICON='snowlook_icon.png'
-OVERVIEW_ICON_PX=120
 # source code of the model, the prediction and validation scripts and this app; shown on the Overview page under the intro
 REPO_URL='https://github.com/fmidev/ml-cryoscope'
 # description of the ML workflow (training data, training, validation, prediction); shown on the Overview page under the code link
@@ -673,17 +686,34 @@ def nearest(lt,lat,lon):
     r=lt.loc[d.idxmin()]
     return float(r['latitude']),float(r['longitude'])
 
-def fc_role(p):
-    # role of a prediction folder: 'driest-member17' -> 'driest', 'wettest-member42' -> 'wettest', others as they are
+def fc_adj_tag(p):
+    # adjusted product suffix of a folder or role ('' for raw ECXENS), the longest first: '-adjusted-era5l' before '-adjusted'
     lab=os.path.basename(str(p).rstrip('/'))
+    return next((t for t in sorted(FC_ADJ_TAGS,key=len,reverse=True) if lab.endswith(t)),'')
+
+def fc_role(p):
+    # role of a prediction folder: 'driest-member17' -> 'driest', 'wettest-member42' -> 'wettest', others as they are;
+    # adjusted ECXENS keeps its tag: 'driest-member17-adjusted' -> 'driest-adjusted', 'ensmean-adjusted-era5l' stays
+    lab=os.path.basename(str(p).rstrip('/'))
+    tag=fc_adj_tag(lab)
+    base=lab[:-len(tag)] if tag else lab
     for r in ('driest','wettest'):
-        if lab==r or lab.startswith(r+'-member'): return r
+        if base==r or base.startswith(r+'-member'): return r+tag
     return lab
 
+def fc_base_role(p):
+    # role without the adjusted tag: 'ensmean-adjusted' -> 'ensmean'
+    r=fc_role(p); t=fc_adj_tag(r)
+    return r[:-len(t)] if t else r
+
+def fc_is_adjusted(p):
+    return bool(fc_adj_tag(fc_role(p)))
+
 def fc_sort_key(p):
-    # prediction folders in FC_ORDER first (ensmean, member01, wettest, driest), any others after them by name
-    lab=fc_role(p)
-    return (FC_ORDER.index(lab) if lab in FC_ORDER else len(FC_ORDER),os.path.basename(str(p).rstrip('/')))
+    # prediction folders in FC_ORDER first (ensmean, member01, wettest, driest), each raw then the adjusted products, others by name
+    lab=fc_base_role(p)
+    return (FC_ORDER.index(lab) if lab in FC_ORDER else len(FC_ORDER),FC_TAG_ORDER.index(fc_adj_tag(fc_role(p))),
+            os.path.basename(str(p).rstrip('/')))
 
 def fc_file(p,stem,day=None,ext='png'):
     # file of a prediction folder: new name <model>_<start>_<pred>_<kind>[_<day>].<ext> if there is one, else the old <stem>[_<day>].<ext>
@@ -832,8 +862,11 @@ def fc_name(pred_dir):
     name=read_json(fc_file(pred_dir,'pred_info',ext='json')).get('name')
     if name: return name
     lab=os.path.basename(pred_dir.rstrip('/'))
-    if fc_role(lab) in FC_NAMES: return FC_NAMES[fc_role(lab)]
-    if lab.startswith('member') and lab[6:].isdigit(): return f'ECXENS member {int(lab[6:])}'
+    tag=fc_adj_tag(fc_role(lab))
+    base=lab[:-len(tag)] if tag else lab
+    tagname=lambda n: n.replace('ECXENS',FC_ADJ_TAGS[tag][1],1) if tag else n
+    if fc_base_role(lab) in FC_NAMES: return tagname(FC_NAMES[fc_base_role(lab)])
+    if base.startswith('member') and base[6:].isdigit(): return tagname(f'ECXENS member {int(base[6:])}')
     return lab
 
 def fc_metrics(preds):
@@ -999,8 +1032,6 @@ def page_overview():
     global SHOW_FOOTER
     SHOW_FOOTER=False
     if SNOWFALL: st.markdown(snowfall_html(),unsafe_allow_html=True)
-    # SnowLook eye (the app icon, no text) above the title
-    if logo(OVERVIEW_ICON): st.image(logo(OVERVIEW_ICON),width=OVERVIEW_ICON_PX)
     st.title(APP_NAME)
     st.markdown('**CryoSCOPE snow water equivalent (SWE) ML model**')
     st.markdown(OVERVIEW_INTRO)
@@ -1689,7 +1720,8 @@ def fc_case_scores(r):
     d=fc_read_metrics(p)
     if d is None: return {}
     out={}
-    for k,l in [('bias','bias (mm)'),('rmse','RMSE (mm)'),('kge','KGE'),('csi_1','CSI 1 mm'),('skill_mse_vs_ecens','MSE skill vs ECENS')]:
+    for k,l in [('bias','bias (mm)'),('rmse','RMSE (mm)'),('kge','KGE'),('csi_1','CSI 1 mm'),('skill_mse_vs_ecens','MSE skill vs ECENS'),
+                ('skill_mse_vs_ecens500','MSE skill vs ECENS 500 m')]:
         if k in d: out[l]=d[k].mean()
     return out
 
@@ -1741,8 +1773,6 @@ def fc_run_view(R,region,model,simple=False):
     # daily maps, scores, summaries, members and figures of one forecast run (one model, region and start date)
     run_path,preds,base_time=R['run'],R['preds'],R['base_time']
     df=fc_metrics(preds)
-    if df is None:
-        st.info('No scores for this start date (no SNOWCAP SWE for its days yet): forecast maps and ensemble members only.')
     names=[fc_name(p) for p in preds]
     # the folder's start date and the dates inside swe_metrics.csv must agree, otherwise the folder holds another run's results
     bt_scores=fc_base_from_scores(preds[0])
@@ -1751,77 +1781,32 @@ def fc_run_view(R,region,model,simple=False):
                    f"{df['date'].min():%Y-%m-%d} to {df['date'].max():%Y-%m-%d} (start {bt_scores:%Y-%m-%d}): "
                    "these files come from another forecast run, check what was copied into this folder")
 
-    # ---- daily maps first: per prediction raw ECENS, ECXENS, HKL (one figure) and ECXENS minus HKL
-    st.subheader('Daily maps')
-    dates=sorted({d for p in preds for d in fc_days(p)})
-    if not dates:
-        st.info('no daily map figures in this run')
-    else:
-        lab=lambda t: f"{pd.Timestamp(t):%Y-%m-%d}"+(f" (lead {(pd.Timestamp(t)-base_time).days} d)" if base_time is not None else '')
-        c1,c2=st.columns([3,2])
-        if len(dates)>1:
-            day=c1.select_slider('day',options=dates,value=dates[0],format_func=lab,key=f'fc_day_{run_path}')
-        else:
-            day=dates[0]; c1.markdown(f'**day** {lab(day)}')
-        show=c2.multiselect('predictions',preds,default=preds,format_func=fc_name,key=f'fc_show_{run_path}')
-        st.caption(f'Each row: raw ECENS (as in the file, 0.1° grid), ECXENS and HKL SWE with the same legend; ECXENS minus HKL (500 m); '
-                   f'ECENS minus HKL (0.1°, HKL averaged into the ECENS cells); |ECXENS bias| minus |ECENS bias| (0.1°, greens and blues = ECXENS closer '
-                   f'to HKL, yellows and reds = further). All bias maps: soft greens and yellows within ±{MILD_BIAS:g} mm, strong blues and reds beyond.')
-        ts=pd.Timestamp(day)
-        for p in show:
-            # wettest and driest members collapsed: their maps open with a click
-            collapsed=fc_role(p) in FC_COLLAPSED
-            box=st.expander(fc_name(p),expanded=False) if collapsed else st.container()
-            with box:
-                if not collapsed: st.markdown(f'#### {fc_name(p)}')
-                r=df[(df['pred']==os.path.basename(p))&(df['date']==ts)] if df is not None else pd.DataFrame()
-                if not r.empty:
-                    r=r.iloc[0]
-                    parts=[('bias',r.get('bias'),'{:+.1f} mm'),('RMSE',r.get('rmse'),'{:.1f} mm'),('KGE',r.get('kge'),'{:.3f}'),
-                           ('CSI 1 mm',r.get('csi_1'),'{:.3f}'),('POD 1 mm',r.get('pod_1'),'{:.3f}'),('FAR 1 mm',r.get('far_1'),'{:.3f}')]
-                    if pd.notna(r.get('vol_ecx_km3')) and pd.notna(r.get('vol_hkl_km3')) and r.get('vol_hkl_km3'):
-                        parts.append(('SWE volume ECXENS / HKL',r['vol_ecx_km3']/r['vol_hkl_km3'],'{:.2f}'))
-                    if pd.notna(r.get('skill_mse_vs_ecens')):
-                        parts+=[('0.1° RMSE ECENS',r.get('ecens_rmse'),'{:.1f} mm'),('ECXENS',r.get('ecx01_rmse'),'{:.1f} mm'),
-                                ('MSE skill vs ECENS',r.get('skill_mse_vs_ecens'),'{:+.2f}'),('cells improved',r.get('frac_cells_improved'),'{:.0%}')]
-                    st.markdown(' | '.join(f'{k} **{fmt(v,f)}**' for k,v,f in parts))
-                if fc_new_layout(p):
-                    # new layout: raw ECENS, ECXENS and SNOWCAP single maps in one row (same size and area), the SWE legend,
-                    # then the bias maps of the day (only on days with SNOWCAP)
-                    img_row([(fc_file(p,k,day),None) for k in ('swe_map_ecens','swe_map_ecxens','swe_map_hkl')])
-                    lg=fc_file(p,'swe_legend')
-                    if os.path.exists(lg): st.image(lg,width=900)
-                    img_row([(fc_file(p,k,day),None) for k in ('swe_bias','swe_ecens_bias','swe_bias_gain')])
-                    continue
-                # widths follow the png aspect ratios, so all images in the row get the same height
-                row=[os.path.join(p,f'swe_compare_{day}.png'),os.path.join(p,f'swe_bias_{day}.png')]
-                # ECENS bias and bias size change; runs from before that have the ECXENS minus ECENS map or nothing
-                extra=[os.path.join(p,f'{n}_{day}.png') for n in ('swe_ecens_bias','swe_bias_gain')]
-                extra=[x for x in extra if os.path.exists(x)] or [x for x in [os.path.join(p,f'swe_ecx_minus_ecens_{day}.png')] if os.path.exists(x)]
-                row+=extra
-                ratios=[img_ratio(fp,d) for fp,d in zip(row,[17.7/8]+[7/8]*(len(row)-1))]
-                if len(row)>1 and sum(ratios)>6:
-                    # wide domains (Alps, landscape figures): comparison on its own row, the bias maps side by side below it
-                    img(row[0])
-                    for col,fp in zip(st.columns(ratios[1:]),row[1:]):
-                        with col: img(fp)
-                else:
-                    for col,fp in zip(st.columns(ratios),row):
-                        with col: img(fp)
-
-    # ---- everything else below the maps
-    st.divider()
+    # ---- what to show: picked here, under the start date table; only the picked view is drawn
+    views=['Maps']
+    if fc_domain_ts_file(preds): views.append('Domain mean time series')   # cryo-ecxens-performance.py runs
+    views.append('Ensemble members')
+    if df is not None and fc_has_regions(preds): views.append('Regions')
+    if any(os.path.isdir(os.path.join(run_path,c)) for c in FC_CMP_DIRS): views.append('Adjusted vs raw')
+    if df is not None: views+=['Scores vs lead day','Period summary']
+    if SHOW_ALL_FIGURES: views.append('All figures')
+    if df is not None: views.append('Scores table')
+    if st.session_state.get('fc_view') not in views: st.session_state['fc_view']='Maps'
+    view=st.radio('show',views,horizontal=True,key='fc_view',label_visibility='collapsed')
     if df is None:
-        # no scores: only the domain mean plots of every member
-        st.subheader('Ensemble members')
-        fc_member_ts(run_path,base_time)
-        return
-    st.subheader('Scores and summaries')
-    # simple (the final model page): ensemble members first with only the domain mean plots, then the period summary
-    names=(['Ensemble members','Period summary'] if simple else
-           ['Scores vs lead day','Period summary','Ensemble members']+(['All figures'] if SHOW_ALL_FIGURES else [])+['Scores table'])
-    T=dict(zip(names,st.tabs(names)))
+        st.caption('No scores for this start date (no SNOWCAP SWE for its days yet): forecast maps and ensemble members only.')
+    T={view:st.container()}   # the sections below each draw only when their view is picked
     order={'name':names}
+
+    if view=='Maps':
+        fc_maps_view(preds,df,run_path,base_time)
+
+    if 'Domain mean time series' in T:
+        with T['Domain mean time series']:
+            fc_domain_ts(preds,base_time,key=run_path)
+
+    if 'Adjusted vs raw' in T:
+        with T['Adjusted vs raw']:
+            fc_adjusted_vs_raw(run_path)
 
     if 'Scores vs lead day' in T:
         with T['Scores vs lead day']:
@@ -1854,6 +1839,30 @@ def fc_run_view(R,region,model,simple=False):
                 f=px.line(vol,x='lead_day',y='km3',color='name',markers=True,height=340,title='total SWE volume (common valid pixels)',
                           category_orders={'name':names+['HKL']},labels={'lead_day':'lead day','name':'','km3':'km³ water'})
                 chart(f,key='fc_vol')
+            if 'ecens500_rmse' in df and df['ecens500_rmse'].notna().any():
+                st.markdown('**ECXENS vs raw ECENS remapped to the SNOWCAP 500 m grid, both against SNOWCAP (HKL)** (ens mean, same pixels)')
+                sc5=st.radio('score',['rmse','bias','mae','kge'],horizontal=True,format_func=lambda m:FC_METRICS[m][0],key='fc_ecens500_score')
+                d5=df[df['ecens500_rmse'].notna()]
+                raw5=d5[d5['pred'].map(lambda x:not fc_is_adjusted(x))]
+                both=pd.concat([d5[['lead_day','name',sc5]].rename(columns={sc5:'v','name':'source'}),
+                                (raw5 if not raw5.empty else d5).drop_duplicates('lead_day')[['lead_day',f'ecens500_{sc5}']]
+                                .rename(columns={f'ecens500_{sc5}':'v'}).assign(source='ECENS remapped')])
+                c1,c2=st.columns(2)
+                cmap={n:('#8c564b' if 'ERA5' in n else '#2ca02c' if 'adjusted' in n else '#1f77b4') for n in d5['name'].unique()}
+                cmap['ECENS remapped']='#ff7f0e'
+                f=px.line(both,x='lead_day',y='v',color='source',markers=True,height=360,title=f'{FC_METRICS[sc5][0]}, 500 m',
+                          color_discrete_map=cmap,labels={'lead_day':'lead day','v':FC_METRICS[sc5][1] or sc5,'source':''})
+                if sc5=='bias': f.add_hline(y=0,line_color='black',line_width=0.6)
+                with c1: chart(f,key='fc_ecens500_both')
+                sk=d5.melt(id_vars=['lead_day','name'],value_vars=[c for c in ['skill_mse_vs_ecens500','frac_px_improved500'] if c in d5],
+                           var_name='score',value_name='value')
+                sk['score']=sk['score'].map({'skill_mse_vs_ecens500':'MSE skill vs ECENS remapped','frac_px_improved500':'share of pixels improved'})
+                f=px.line(sk,x='lead_day',y='value',color='name',facet_col='score',markers=True,height=360,color_discrete_map=cmap,
+                          labels={'lead_day':'lead day','value':'','name':''})
+                f.for_each_annotation(lambda a:a.update(text=a.text.split('=')[-1]))
+                f.add_hline(y=0,line_color='black',line_width=0.6,col=1); f.add_hline(y=0.5,line_dash='dot',line_color='gray',col=2)
+                with c2: chart(f,key='fc_ecens500_skill')
+                st.caption('Share of pixels improved counts only pixels where the two errors differ. MSE skill above 0 means ECXENS is closer to SNOWCAP than raw ECENS.')
             if 'skill_mse_vs_ecens' in df and df['skill_mse_vs_ecens'].notna().any():
                 st.markdown('**ECXENS vs raw ECENS, both against HKL on the 0.1° ECENS grid** (same cells for both)')
                 sc=st.radio('score',['rmse','bias','mae','kge'],horizontal=True,format_func=lambda m:FC_METRICS[m][0],key='fc_ecens_score')
@@ -1888,7 +1897,9 @@ def fc_run_view(R,region,model,simple=False):
                     if k in d: row[l]=d[k].mean()
                 if {'vol_ecx_km3','vol_hkl_km3'}<=set(d.columns): row['SWE volume ECXENS / HKL']=(d['vol_ecx_km3']/d['vol_hkl_km3']).mean()
                 for k,l in [('ecens_bias','0.1° bias ECENS (mm)'),('ecx01_bias','0.1° bias ECXENS (mm)'),('ecens_rmse','0.1° RMSE ECENS (mm)'),
-                            ('ecx01_rmse','0.1° RMSE ECXENS (mm)'),('skill_mse_vs_ecens','MSE skill vs ECENS'),('frac_cells_improved','cells improved')]:
+                            ('ecx01_rmse','0.1° RMSE ECXENS (mm)'),('skill_mse_vs_ecens','MSE skill vs ECENS'),('frac_cells_improved','cells improved'),
+                            ('ecens500_bias','500 m bias ECENS remapped (mm)'),('ecens500_rmse','500 m RMSE ECENS remapped (mm)'),
+                            ('skill_mse_vs_ecens500','MSE skill vs ECENS 500 m'),('frac_px_improved500','pixels improved (500 m)')]:
                     if k in d: row[l]=d[k].mean()
                 summ.append(row)
             st.markdown('**Means over all lead days**')
@@ -1900,7 +1911,13 @@ def fc_run_view(R,region,model,simple=False):
                 with cols[i%2]:
                     st.markdown(f'**{fc_name(p)}**')
                     files=[f for f in (fc_kind_file(p,k) for k in kinds) if f]   # new layout: each figure its own png
-                    for f in files or [os.path.join(p,old)]: img(f)
+                    files=files or ([os.path.join(p,old)] if old else [])
+                    if not files: st.caption('not in this prediction (ens mean only, or a run from before)')
+                    for f in files: img(f)
+
+    if 'Regions' in T:
+        with T['Regions']:
+            fc_regions_view(preds,run_path)
 
     if 'Ensemble members' in T:
         with T['Ensemble members']:
@@ -1959,18 +1976,370 @@ def fc_run_view(R,region,model,simple=False):
             table(show.round(4),hide_index=True)
             st.download_button('download scores (csv)',show.to_csv(index=False),file_name=f'swe_metrics_{fc_rel(run_path).replace(os.sep,"_")}.csv',mime='text/csv')
 
+def fc_day_scores(r):
+    # scores of one prediction and day as 'name value' parts for the line above its maps
+    parts=[('bias',r.get('bias'),'{:+.1f} mm'),('RMSE',r.get('rmse'),'{:.1f} mm'),('KGE',r.get('kge'),'{:.3f}'),
+           ('CSI 1 mm',r.get('csi_1'),'{:.3f}'),('POD 1 mm',r.get('pod_1'),'{:.3f}'),('FAR 1 mm',r.get('far_1'),'{:.3f}')]
+    if pd.notna(r.get('vol_ecx_km3')) and pd.notna(r.get('vol_hkl_km3')) and r.get('vol_hkl_km3'):
+        parts.append(('SWE volume / HKL',r['vol_ecx_km3']/r['vol_hkl_km3'],'{:.2f}'))
+    if pd.notna(r.get('skill_mse_vs_ecens500')):
+        parts+=[('RMSE ECENS remapped',r.get('ecens500_rmse'),'{:.1f} mm'),('MSE skill vs ECENS',r.get('skill_mse_vs_ecens500'),'{:+.2f}'),
+                ('pixels improved',r.get('frac_px_improved500'),'{:.0%}')]
+    elif pd.notna(r.get('skill_mse_vs_ecens')):
+        parts+=[('0.1° RMSE ECENS',r.get('ecens_rmse'),'{:.1f} mm'),('MSE skill vs ECENS',r.get('skill_mse_vs_ecens'),'{:+.2f}')]
+    return ' | '.join(f'{k} **{fmt(v,f)}**' for k,v,f in parts)
+
+def fc_groups(preds):
+    # raw and adjusted folders of the same prediction together, in the order of preds: [(role, {tag: folder})], tag '' = raw
+    g={}
+    for p in preds:
+        g.setdefault(fc_base_role(p),{})[fc_adj_tag(fc_role(p))]=p
+    return list(g.items())
+
+def fc_maps_view(preds,df,run_path,base_time):
+    # one row of SWE maps per prediction: raw ECENS, ECXENS, ECXENS adjusted, SNOWCAP (HKL), CLMS; then one row of bias maps
+    dates=sorted({d for p in preds for d in fc_days(p)})
+    if not dates:
+        st.info('no daily map figures in this run'); return
+    groups=fc_groups(preds)
+    lab=lambda t: f"{pd.Timestamp(t):%Y-%m-%d}"+(f" (lead {(pd.Timestamp(t)-base_time).days} d)" if base_time is not None else '')
+    c1,c2=st.columns([3,2])
+    if len(dates)>1:
+        day=c1.select_slider('day',options=dates,value=dates[0],format_func=lab,key=f'fc_day_{run_path}')
+    else:
+        day=dates[0]; c1.markdown(f'**day** {lab(day)}')
+    keys=[k for k,_ in groups]
+    show=c2.multiselect('predictions',keys,default=keys,format_func=fc_pred_label,key=f'fc_show_{run_path}')
+    st.caption('SWE maps, same legend: raw ECENS (its own 9 km grid), ECXENS, ECXENS adjusted to the SNOWCAP start state, ECXENS '
+               'adjusted to ERA5-Land (when there), SNOWCAP (HKL) and CLMS satellite SWE (5 km, no values on mountains, glaciers and water). '
+               'Bias maps: ECENS (remapped to 500 m), ECXENS and the adjusted ECXENS minus SNOWCAP, and |ECXENS bias| minus |ECENS bias| on the ECENS cells (greens and blues = ECXENS closer '
+               f'to SNOWCAP). Bias colours: soft within ±{MILD_BIAS:g} mm, strong beyond.')
+    ref=next((p for p in preds if fc_role(p)=='ensmean'),preds[0])   # SNOWCAP and CLMS maps are in the raw ens mean folder
+    ts=pd.Timestamp(day)
+    for k,G in groups:
+        if k not in show: continue
+        pr=G.get(''); fs=[G.get(t) for t in FC_TAG_ORDER]; one=next(p for p in fs if p)
+        collapsed=k in FC_COLLAPSED or (k.startswith('member') and k[6:].isdigit())
+        box=st.expander(fc_pred_label(k),expanded=False) if collapsed else st.container()
+        with box:
+            if not collapsed: st.markdown(f'#### {fc_pred_label(k)}')
+            for p in fs:
+                if p is None or df is None: continue
+                r=df[(df['pred']==os.path.basename(p))&(df['date']==ts)]
+                if not r.empty: st.markdown(f'{fc_name(p)}: '+fc_day_scores(r.iloc[0]))
+            if not fc_new_layout(one):
+                fc_old_maps([p for p in fs if p],day); continue
+            f=lambda p,stem: fc_file(p,stem,day) if p else ''
+            # raw ECENS, ECXENS raw, adjusted (SNOWCAP), adjusted (ERA5-Land), SNOWCAP, CLMS; then the bias maps in the same order
+            img_row([(f(one,'swe_map_ecens'),None)]+[(f(p,'swe_map_ecxens'),None) for p in fs]
+                    +[(f(ref,'swe_map_hkl'),None),(f(ref,'swe_map_clms'),None)])
+            lg=fc_file(one,'swe_legend')
+            if os.path.exists(lg): st.image(lg,width=900)
+            img_row([(f(one,'swe_ecens500_bias'),None)]+[(f(p,'swe_bias'),None) for p in fs]+[(f(pr or one,'swe_bias_gain'),None)])
+
+def fc_old_maps(ps,day):
+    # runs of the previous validation script: its combined figures, widths from the png aspect ratios
+    for p in ps:
+        row=[os.path.join(p,f'swe_compare_{day}.png'),os.path.join(p,f'swe_bias_{day}.png')]
+        extra=[os.path.join(p,f'{n}_{day}.png') for n in ('swe_ecens_bias','swe_bias_gain')]
+        extra=[x for x in extra if os.path.exists(x)] or [x for x in [os.path.join(p,f'swe_ecx_minus_ecens_{day}.png')] if os.path.exists(x)]
+        row+=extra
+        ratios=[img_ratio(fp,d) for fp,d in zip(row,[17.7/8]+[7/8]*(len(row)-1))]
+        if len(row)>1 and sum(ratios)>6:
+            img(row[0])
+            for col,fp in zip(st.columns(ratios[1:]),row[1:]):
+                with col: img(fp)
+        else:
+            for col,fp in zip(st.columns(ratios),row):
+                with col: img(fp)
+
+FC_ADJ_COLS={FC_ADJ:'ecxens_adj',FC_ADJ_ERA5L:'ecxens_adj_era5l'}   # column of each adjusted ens mean in the merged time series
+
+def fc_domain_ts_file(preds,role='ensmean'):
+    # domain-mean-timeseries.csv of the ens mean (cryo-ecxens-performance.py), None when the run has none
+    p=next((p for p in preds if fc_role(p)==role),None)
+    return fc_kind_file(p,'domain-mean-timeseries','csv') if p else None
+
+FC_TS_LINES=[('ecxens','ECXENS ens mean (500 m)','#1f77b4','solid'),('ecxens_adj','ECXENS adjusted ens mean (500 m)','#2ca02c','solid'),
+             ('ecxens_adj_era5l','ECXENS adjusted ERA5-Land ens mean (500 m)','#8c564b','solid'),
+             ('ecens500','raw ECENS ens mean remapped to 500 m','#ff7f0e','dash'),('snowcap','SNOWCAP (HKL, 500 m)','#d7191c','solid'),
+             ('clms','CLMS satellite SWE (500 m, CLMS pixels only)','#9467bd','dashdot')]
+
+def fc_domain_ts(preds,base_time,key):
+    # domain mean SWE per day of ECXENS, ECENS remapped and SNOWCAP over the same pixels, interactive from the csv
+    f=fc_domain_ts_file(preds)
+    d=read_csv(f) if f else None
+    if d is None or 'date' not in d:
+        st.info('no domain mean time series in this run'); return
+    d=d.copy(); d['date']=pd.to_datetime(d['date'])
+    for tag,col in FC_ADJ_COLS.items():   # the adjusted products' ens mean from their own folders
+        fa=fc_domain_ts_file(preds,'ensmean'+tag)
+        da=read_csv(fa) if fa else None
+        if da is not None and 'ecxens' in da:
+            da=da.copy(); da['date']=pd.to_datetime(da['date'])
+            d=d.merge(da[['date','ecxens']].rename(columns={'ecxens':col}),on='date',how='outer').sort_values('date')
+    c1,c2=st.columns([1,4])
+    if 'snowcap' in d and d['snowcap'].notna().any():
+        for col,lab in [('ecxens','ECXENS'),('ecxens_adj','ECXENS adjusted'),('ecxens_adj_era5l','ECXENS adjusted ERA5-Land'),('ecens500','ECENS remapped')]:
+            if col not in d: continue
+            b=d.dropna(subset=[col,'snowcap'])
+            if len(b)<2: continue
+            e=b[col]-b['snowcap']
+            c1.metric(f'{lab} bias',fmt(e.mean(),'{:+.1f} mm'))
+            c1.metric(f'{lab} RMSE',fmt(float(np.sqrt((e**2).mean())),'{:.1f} mm'))
+        if {'clms','snowcap_clms'}<=set(d.columns):
+            b=d.dropna(subset=['clms','snowcap_clms'])
+            if len(b)>=2: c1.metric('CLMS bias (CLMS pixels)',fmt((b['clms']-b['snowcap_clms']).mean(),'{:+.1f} mm'))
+    fig=go.Figure()
+    for col,lab,color,dash in FC_TS_LINES:
+        if col in d and d[col].notna().any():
+            x=d.dropna(subset=[col])
+            fig.add_scatter(x=x['date'],y=x[col],mode='lines+markers',name=lab,line=dict(color=color,dash=dash,width=2.4 if col=='snowcap' else 2),
+                            hovertemplate='%{y:.1f} mm')
+    fig.update_layout(height=430,yaxis_title='domain mean SWE (mm)',hovermode='x unified',legend=dict(orientation='h',y=1.1),margin=dict(t=30))
+    with c2: chart(fig,key=f'fc_domts_{key}')
+    st.caption('Mean SWE over the SNOWCAP domain, over the same pixels for every line, so the lines compare the total snow amount '
+               '(CLMS: only the pixels where CLMS has values, it leaves out mountains, glaciers and water). '
+               'Bias and RMSE on the left use these daily domain means.')
+    with st.expander('time series table'):
+        table(d.round(2),hide_index=True)
+
+# regional results of cryo-ecxens-performance.py (REGIONS there): Finnish, Swedish and Norwegian Lapland, central and southern parts
+FC_REG_LINES=[('ecxens','ECXENS ens mean','#1f77b4','solid'),('ecxens_adj','ECXENS adjusted ens mean','#2ca02c','solid'),
+              ('ecxens_adj_era5l','ECXENS adjusted ERA5-Land ens mean','#8c564b','solid'),
+              ('ecens500','ECENS ens mean remapped','#ff7f0e','dash'),('snowcap','SNOWCAP','#d7191c','solid'),
+              ('clms','CLMS (CLMS pixels)','#9467bd','dashdot')]
+
+def fc_has_regions(preds):
+    p=next((p for p in preds if fc_role(p)=='ensmean'),None)
+    return bool(p and (fc_kind_file(p,'regions-metrics','csv') or fc_kind_file(p,'domain-mean-timeseries-regions','csv')))
+
+def fc_regions_view(preds,run_path):
+    # per region: domain mean SWE per day, mean scores, scores per lead day (raw and adjusted ECXENS against ECENS remapped)
+    pr=next((p for p in preds if fc_role(p)=='ensmean'),None)
+    pas={t:next((p for p in preds if fc_role(p)=='ensmean'+t),None) for t in FC_ADJ_TAGS}   # adjusted ens mean folders
+    pas={t:p for t,p in pas.items() if p}
+    rd=lambda p,k: read_csv(fc_kind_file(p,k,'csv') or os.path.join(p,'none.csv'))
+    ts=rd(pr,'domain-mean-timeseries-regions')
+    mr=rd(pr,'regions-metrics')
+    name=lambda d:d['region_name'] if 'region_name' in d else d['region']
+    st.caption('Regions: Finnish, Swedish and Norwegian Lapland, central and southern parts (country borders from Natural Earth, '
+               'latitude limits in REGIONS of cryo-ecxens-performance.py). Ens mean, SWE on the 500 m grid against SNOWCAP.')
+    if ts is not None and 'date' in ts:
+        d=ts.copy(); d['date']=pd.to_datetime(d['date']); d['region_name']=name(d)
+        for t,pa in pas.items():
+            tsa=rd(pa,'domain-mean-timeseries-regions')
+            if tsa is not None and 'ecxens' in tsa:
+                a=tsa.copy(); a['date']=pd.to_datetime(a['date'])
+                d=d.merge(a[['date','region','ecxens']].rename(columns={'ecxens':FC_ADJ_COLS[t]}),on=['date','region'],how='left')
+        cols=[c for c,_,_,_ in FC_REG_LINES if c in d and d[c].notna().any()]
+        lab={c:l for c,l,_,_ in FC_REG_LINES}
+        long=d.melt(id_vars=['date','region_name'],value_vars=cols,var_name='line',value_name='SWE')
+        long['line']=long['line'].map(lab)
+        regs=list(dict.fromkeys(d['region_name']))
+        f=px.line(long,x='date',y='SWE',color='line',line_dash='line',facet_col='region_name',facet_col_wrap=3,markers=True,
+                  height=260*(-(-len(regs)//3))+80,category_orders={'region_name':regs,'line':[lab[c] for c in cols]},
+                  color_discrete_map={l:c for _,l,c,_ in FC_REG_LINES},
+                  line_dash_map={l:ds for _,l,_,ds in FC_REG_LINES},labels={'SWE':'mean SWE (mm)','line':'','date':''})
+        f.for_each_annotation(lambda x:x.update(text=x.text.split('=')[-1]))
+        f.update_yaxes(matches=None,showticklabels=True); f.update_layout(hovermode='x unified',legend=dict(orientation='h',y=1.06),margin=dict(t=50))
+        st.markdown('**Mean SWE per region and day** (same pixels for every line; CLMS lines on the CLMS pixels only)')
+        chart(f,key=f'fc_reg_ts_{run_path}')
+    if mr is not None and 'region' in mr:
+        parts=[mr.assign(source='ECXENS',region_name=name(mr))]
+        for t,pa in pas.items():
+            ma=rd(pa,'regions-metrics')
+            if ma is not None and 'region' in ma: parts.append(ma.assign(source=FC_ADJ_TAGS[t][1],region_name=name(ma)))
+        if 'ecens500_rmse' in mr and mr['ecens500_rmse'].notna().any():
+            e=mr[['date','lead_day','region']+[c for c in mr.columns if c.startswith('ecens500_')]].copy()
+            e.columns=[c.replace('ecens500_','') for c in e.columns]
+            parts.append(e.assign(source='ECENS remapped',region_name=name(mr)))
+        m=pd.concat(parts,ignore_index=True)
+        regs=list(dict.fromkeys(m['region_name']))
+        c1,c2=st.columns([3,2])
+        sc=c1.radio('score',['rmse','bias','mae','kge'],horizontal=True,format_func=lambda x:FC_METRICS[x][0],key=f'fc_reg_sc_{run_path}')
+        cmap={'ECXENS':'#1f77b4','ECENS remapped':'#ff7f0e',**{v[1]:v[3] for v in FC_ADJ_TAGS.values()}}
+        if sc in m:
+            g=m.groupby(['region_name','source'],sort=False)[sc].mean().reset_index()
+            f=px.bar(g,x='region_name',y=sc,color='source',barmode='group',height=400,color_discrete_map=cmap,
+                     category_orders={'region_name':regs},title=f'{FC_METRICS[sc][0]}, mean over the lead days',
+                     labels={'region_name':'',sc:FC_METRICS[sc][1] or sc,'source':''})
+            if sc=='bias': f.add_hline(y=0,line_color='black',line_width=0.6)
+            chart(f,key=f'fc_reg_bar_{run_path}')
+            reg=c2.selectbox('per lead day, region',regs,key=f'fc_reg_pick_{run_path}')
+            f=px.line(m[m['region_name']==reg],x='lead_day',y=sc,color='source',markers=True,height=360,color_discrete_map=cmap,
+                      title=f'{FC_METRICS[sc][0]} per lead day, {reg}',labels={'lead_day':'lead day',sc:FC_METRICS[sc][1] or sc,'source':''})
+            if sc=='bias': f.add_hline(y=0,line_color='black',line_width=0.6)
+            chart(f,key=f'fc_reg_lead_{run_path}')
+        t=m.groupby(['region_name','source'],sort=False)[[c for c in ['bias','mae','rmse','kge','skill_mse_vs_ecens500'] if c in m]].mean()
+        with st.expander('scores per region (means over the lead days)'):
+            table(t.round(3).reset_index(),hide_index=True)
+            st.caption('MSE skill vs ECENS remapped above 0: ECXENS closer to SNOWCAP than raw ECENS in that region.')
+    figs=[(fc_kind_file(p,k),f'{fc_name(p)}: {c}') for p in [pr]+list(pas.values()) if p
+          for k,c in [('regions-score-summary','scores per region'),('domain-mean-timeseries-regions','mean SWE per region')]]
+    for sub,tag in [('members','')]+[('members'+t,' '+v[0]) for t,v in FC_ADJ_TAGS.items()]:
+        dd=os.path.join(run_path,sub)
+        figs+=[(fc_kind_file(dd,'ecxens-timeseries-regions'),f'ECXENS{tag} members per region'),
+               (fc_kind_file(dd,'ecens-timeseries-regions'),'raw ECENS members per region' if not tag else None)]
+    figs=[(f,c) for f,c in figs if f and c]
+    if figs:
+        with st.expander('figures of the validation script (regions)'):
+            for i in range(0,len(figs),2):
+                img_row([(f,c) for f,c in figs[i:i+2]])
+
 def fc_member_ts(run_path,base_time):
     # figures of the validation script (MEMBER_TIMESERIES = True): domain mean SWE per day of every ECXENS / ECENS member and HKL
     st.markdown('**Domain mean SWE of every member against HKL**')
     pngs=[(fc_run_file(run_path,'swe_members_ecxens','png'),'ECXENS members'),(fc_run_file(run_path,'swe_members_ecens','png'),'raw ECENS members')]
     if any(os.path.exists(p) for p,_ in pngs): img_row(pngs)
     else: st.info('no swe_members_ecxens.png / swe_members_ecens.png in this run (written by the validation script when MEMBER_TIMESERIES = True)')
+    for t,(short,nm,cdir,_) in FC_ADJ_TAGS.items():   # each adjusted product: its members, and raw and adjusted together
+        adj=fc_kind_file(os.path.join(run_path,'members'+t),'ecxens-timeseries')
+        if adj:
+            cmp=fc_kind_file(os.path.join(run_path,cdir),'adjusted-vs-raw-members-timeseries')
+            img_row([(adj,f'{nm} members')]+([(cmp,f'ECXENS raw and {short} members')] if cmp else []))
+    fc_member_regions(run_path)
+
+# regional member time series (members/timeseries.csv of cryo-ecxens-performance.py, column region): shown source ->
+# (members folder, source in the csv, its SNOWCAP rows, line colour)
+FC_REG_MEMBER_SRC={'ECXENS':('members','ECXENS','SNOWCAP_ECXENS','#1f77b4'),
+                   'ECXENS adjusted':('members'+FC_ADJ,'ECXENS','SNOWCAP_ECXENS','#2ca02c'),
+                   'ECXENS adjusted ERA5-Land':('members'+FC_ADJ_ERA5L,'ECXENS','SNOWCAP_ECXENS','#8c564b'),
+                   'raw ECENS':('members','ECENS','SNOWCAP_ECENS','#ff7f0e')}
+
+def fc_member_regions(run_path):
+    # every member, their mean and SNOWCAP per region, one panel per region, interactive from the member time series csv
+    tabs={}
+    for lab,(sub,src,hsrc,col) in FC_REG_MEMBER_SRC.items():
+        f=fc_kind_file(os.path.join(run_path,sub),'timeseries','csv')
+        d=read_csv(f) if f else None
+        if d is None or 'region' not in d or 'source' not in d: continue
+        d=d[(d['region']!='all')&d['source'].isin([src,hsrc])]
+        if d[d['source']==src].empty: continue
+        tabs[lab]=(d,src,hsrc,col)
+    if not tabs:
+        pngs=[(fc_kind_file(os.path.join(run_path,sub),k),c) for sub,k,c in
+              [('members','ecxens-timeseries-regions','ECXENS members per region'),('members','ecens-timeseries-regions','raw ECENS members per region'),
+               ('members'+FC_ADJ,'ecxens-timeseries-regions','ECXENS adjusted members per region'),
+               ('members'+FC_ADJ_ERA5L,'ecxens-timeseries-regions','ECXENS adjusted ERA5-Land members per region')]]
+        pngs=[(p,c) for p,c in pngs if p]
+        if pngs:
+            st.markdown('**Members per region**')
+            for p,c in pngs: img(p,c)
+        return
+    st.markdown('**Domain mean SWE of every member against SNOWCAP, per region**')
+    c1,c2=st.columns([3,2])
+    labs=c1.multiselect('forecasts side by side',list(tabs),default=list(tabs),key=f'fc_regmem_srcs_{run_path}')
+    show=c2.radio('members',['lines','band'],horizontal=True,key=f'fc_regmem_show_{run_path}',
+                  format_func={'lines':'every member','band':'10 to 90 % band'}.get)
+    if not labs:
+        st.info('pick at least one forecast'); return
+    data={}
+    for lab in labs:
+        d,src,hsrc,col=tabs[lab]
+        d=d.copy(); d['date']=pd.to_datetime(d['date'])
+        data[lab]=(d,src,hsrc,col)
+    allregs=set().union(*(set(v[0]['region']) for v in data.values()))
+    names={k:v.get('name',k) for k,v in (read_json(fc_run_file(run_path,'run_info','json')).get('regions') or {}).items()}
+    regs=list(dict.fromkeys(r for r in (list(names)+sorted(allregs)) if r in allregs))
+    reg=c1.multiselect('regions',regs,default=regs,format_func=lambda r:names.get(r,r),key=f'fc_regmem_regs_{run_path}')
+    regs=[r for r in regs if r in reg]
+    if not regs:
+        st.info('pick at least one region'); return
+    from plotly.subplots import make_subplots
+    # one row per region, one column per forecast; the same SWE scale along a row, so the forecasts compare directly
+    nrow,ncol=len(regs),len(labs)
+    fig=make_subplots(rows=nrow,cols=ncol,column_titles=labs,row_titles=[names.get(r,r) for r in regs],shared_xaxes=True,
+                      shared_yaxes='rows',vertical_spacing=min(0.04,0.3/max(nrow,1)),horizontal_spacing=0.02)
+    for ri,r in enumerate(regs):
+        for ci,lab in enumerate(labs):
+            d,src,hsrc,col=data[lab]
+            rr,cc=ri+1,ci+1; first=ri==0
+            m=d[(d['region']==r)&(d['source']==src)]
+            if m.empty: continue
+            if show=='lines':
+                for j,(mem,g) in enumerate(m.groupby('member')):
+                    g=g.sort_values('date')
+                    fig.add_scatter(x=g['date'],y=g['swe_mm'],mode='lines',line=dict(color=col,width=0.7),opacity=0.45,hoverinfo='skip',
+                                    name=f'{lab} members',legendgroup=f'mem_{lab}',showlegend=first and j==0,row=rr,col=cc)
+            else:
+                q=m.groupby('date')['swe_mm'].quantile([0.1,0.9]).unstack()
+                fig.add_scatter(x=q.index,y=q[0.9],mode='lines',line=dict(width=0),hoverinfo='skip',showlegend=False,
+                                legendgroup=f'band_{lab}',row=rr,col=cc)
+                fig.add_scatter(x=q.index,y=q[0.1],mode='lines',line=dict(width=0),fill='tonexty',fillcolor=latest_rgba(col,0.3),
+                                name=f'{lab} members 10 to 90 %',hoverinfo='skip',legendgroup=f'band_{lab}',showlegend=first,row=rr,col=cc)
+            mean=m.groupby('date')['swe_mm'].mean()
+            fig.add_scatter(x=mean.index,y=mean.values,mode='lines',line=dict(color='black',width=2),name='member mean',
+                            legendgroup='mean',showlegend=first and ci==0,hovertemplate=f'{lab} mean %{{y:.1f}} mm',row=rr,col=cc)
+            h=d[(d['region']==r)&(d['source']==hsrc)].sort_values('date')
+            if not h.empty:
+                fig.add_scatter(x=h['date'],y=h['swe_mm'],mode='lines+markers',line=dict(color='#d7191c',width=2.2),marker=dict(size=4),
+                                name='SNOWCAP',legendgroup='snowcap',showlegend=first and ci==0,hovertemplate='SNOWCAP %{y:.1f} mm',
+                                row=rr,col=cc)
+    fig.update_layout(height=230*nrow+110,hovermode='x unified',legend=dict(orientation='h',y=1+60/(230*nrow+110)),margin=dict(t=90,r=150))
+    fig.for_each_annotation(lambda a:a.update(textangle=0,xanchor='left',font=dict(size=12)) if a.x is not None and a.x>0.99 else None)
+    fig.update_yaxes(showticklabels=True)
+    fig.update_xaxes(showticklabels=True,row=nrow)
+    chart(fig,key=f'fc_regmem_{run_path}_{"_".join(labs)}_{"_".join(regs)}_{show}')
+    st.caption('Rows: regions, columns: forecasts. The SWE scale (mm) is the same along each row and differs between rows. '
+               'ECXENS (raw and adjusted) on the 500 m grid with SNOWCAP on the same pixels; raw ECENS on its 9 km cells with '
+               'SNOWCAP averaged into the same cells, so its SNOWCAP line can differ a little from the others.')
+
+# adjusted against raw (cryo-ecxens-performance.py, adjusted-vs-raw/): shown name -> kinds, each its own png
+FC_CMP_FIGS={'scores per lead day':['adjusted-vs-raw-score-rmse','adjusted-vs-raw-score-bias','adjusted-vs-raw-score-mae',
+                                    'adjusted-vs-raw-score-kge','adjusted-vs-raw-score-skill'],
+             'domain mean time series':['adjusted-vs-raw-domain-mean-timeseries','adjusted-vs-raw-members-timeseries'],
+             'regions':['adjusted-vs-raw-regions-scores','adjusted-vs-raw-timeseries-regions'],
+             'maps':['adjusted-vs-raw-mae-gain','adjustment-mean']}
+
+def fc_adjusted_vs_raw(run_path):
+    # an adjusted ECXENS product against raw ECXENS, both against SNOWCAP (ens mean unless the figure says members)
+    have=[t for t,v in FC_ADJ_TAGS.items() if os.path.isdir(os.path.join(run_path,v[2]))]
+    if not have:
+        st.info('no adjusted ECXENS comparison in this run'); return
+    t=st.radio('adjusted product',have,horizontal=True,key=f'fc_adj_prod_{run_path}',
+               format_func=lambda x:{FC_ADJ:'SNOWCAP adjusted',FC_ADJ_ERA5L:'ERA5-Land adjusted'}.get(x,x)) if len(have)>1 else have[0]
+    short,an,cdir,acol=FC_ADJ_TAGS[t]
+    d=os.path.join(run_path,cdir)
+    src={FC_ADJ:'the SNOWCAP (HKL) state of the start day',FC_ADJ_ERA5L:'ERA5-Land snow 6 days before the start day'}.get(t,'')
+    st.caption(f'{an}: ECXENS adjusted to {src} (adjust-snow-ecxens.py, the correction fades out over 6 months) against raw ECXENS. '
+               'MSE skill above 0 and negative values in the MAE change map mean the adjusting brought the forecast closer to SNOWCAP.')
+    m=read_csv(fc_kind_file(d,'adjusted-vs-raw-metrics','csv') or os.path.join(d,'none.csv'))
+    if m is not None and len(m):
+        c=st.columns(4)
+        for i,(k,l,f) in enumerate([('rmse_raw','RMSE raw','{:.1f} mm'),('rmse_adj',f'RMSE {short}','{:.1f} mm'),
+                                    ('bias_adj',f'bias {short}','{:+.1f} mm'),('skill_mse_adj_vs_raw','MSE skill vs raw','{:+.2f}')]):
+            if k in m: c[i].metric(l+' (mean over lead days)',fmt(m[k].mean(),f))
+        if {'lead_day','rmse_raw','rmse_adj'}<=set(m.columns):
+            sc=st.radio('score',['rmse','bias','mae','kge'],horizontal=True,format_func=lambda x:FC_METRICS[x][0],key=f'fc_adj_sc_{run_path}')
+            lng=pd.concat([m[['lead_day',c_]].rename(columns={c_:'v'}).assign(source=l) for c_,l in
+                           [(f'{sc}_raw','ECXENS raw'),(f'{sc}_adj',an),(f'ecens500_{sc}_raw','ECENS remapped')] if c_ in m])
+            f=px.line(lng,x='lead_day',y='v',color='source',markers=True,height=380,title=f'{FC_METRICS[sc][0]}, ens mean, 500 m',
+                      color_discrete_map={'ECXENS raw':'#1f77b4',an:acol,'ECENS remapped':'#ff7f0e'},
+                      labels={'lead_day':'lead day','v':FC_METRICS[sc][1] or sc,'source':''})
+            if sc=='bias': f.add_hline(y=0,line_color='black',line_width=0.6)
+            chart(f,key=f'fc_adj_chart_{run_path}_{t}')
+    kind=st.radio('figures',list(FC_CMP_FIGS),horizontal=True,key=f'fc_adj_fig_{run_path}')
+    files=[f for f in (fc_kind_file(d,k) for k in FC_CMP_FIGS[kind]) if f]
+    if not files: st.info(f'no figures of this kind in {cdir}/')
+    cols=st.columns(2)
+    for i,f in enumerate(files):
+        with cols[i%2]: img(f)
+    r=read_csv(fc_kind_file(d,'adjusted-vs-raw-regions-scores','csv') or os.path.join(d,'none.csv'))
+    if r is not None:
+        with st.expander('scores per region (means over the lead days)'):
+            table(r.round(2),hide_index=True)
+    if m is not None:
+        with st.expander('scores per lead day'):
+            table(m.round(3),hide_index=True)
 
 def fc_pred_label(lab):
-    lab=fc_role(lab)
-    if lab in FC_NAMES: return FC_NAMES[lab].replace('ECXENS ','')
-    if lab.startswith('member') and lab[6:].isdigit(): return f'member {int(lab[6:])}'
-    return lab
+    tag=fc_adj_tag(fc_role(lab))
+    lab=fc_base_role(lab)
+    tail=' '+FC_ADJ_TAGS[tag][0] if tag else ''
+    if lab in FC_NAMES: return FC_NAMES[lab].replace('ECXENS ','')+tail
+    if lab.startswith('member') and lab[6:].isdigit(): return f'member {int(lab[6:])}'+tail
+    return lab+tail
 
 def fc_date_key(r):
     return f"{r['base_time']:%Y-%m-%d}" if r['base_time'] is not None else os.path.basename(r['run'].rstrip('/'))
@@ -2029,7 +2398,9 @@ def page_compare():
     ref=pdir[pick[0]]   # raw ECENS and HKL are the same in every model folder, taken from the first model
 
     # ---- maps: raw ECENS, ECXENS per model, HKL
-    panels=[(fc_file(ref,'swe_map_ecens',day),'raw ECENS (0.1°)')]
+    panels=[(fc_file(ref,'swe_map_ecens',day),'raw ECENS (9 km)')]
+    e5=fc_file(ref,'swe_map_ecens500',day)
+    if os.path.exists(e5): panels+=[(e5,'raw ECENS remapped to 500 m')]
     panels+=[(fc_file(pdir[m],'swe_map_ecxens',day),f'ECXENS {edition_name(m)}') for m in pick]
     hp=fc_file(ref,'swe_map_hkl',day)
     if os.path.exists(hp) or not fc_new_layout(ref): panels+=[(hp,'HKL (Snowcap)')]   # new runs without SNOWCAP: no SNOWCAP map
@@ -2053,7 +2424,7 @@ def page_compare():
 
     # ---- bias maps of the same day
     with st.expander('bias maps for this day (forecast minus HKL)',expanded=False):
-        bpan=[(fc_file(ref,'swe_ecens_bias',day),'raw ECENS minus HKL (0.1°)')]
+        bpan=[(fc_file(ref,'swe_ecens500_bias',day),'raw ECENS remapped minus HKL (500 m)'),(fc_file(ref,'swe_ecens_bias',day),'raw ECENS minus HKL (0.1°)')]
         bpan+=[(fc_file(pdir[m],'swe_bias',day),f'ECXENS {edition_name(m)} minus HKL') for m in pick]
         bpan=[(p,c) for p,c in bpan if os.path.exists(p)]
         for i in range(0,len(bpan),4):

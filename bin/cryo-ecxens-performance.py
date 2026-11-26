@@ -4,12 +4,14 @@ cryo-ecxens-performance.py
 
 Validate ECXENS SWE forecasts against SNOWCAP SWE (Scandinavia 500 m), CryoSCOPE layout.
 
-usage: python cryo-ecxens-performance.py [BASE] [MODEL] [redo | redo-adjusted]      e.g. python cryo-ecxens-performance.py 20191210 swe-ml-2
+usage: python cryo-ecxens-performance.py [BASE] [MODEL] [redo | redo-adjusted | redo-era5l]      e.g. python cryo-ecxens-performance.py 20191210 swe-ml-2
 
 Finished work is not done again: a prediction whose results exist (and whose ECXENS files have not changed since,
 .state-raw.json / .state-adjusted.json in the run folder) is skipped, existing pngs are not redrawn and the member
-ranking and time series are reused. 'redo' as the third argument does everything again; 'redo-adjusted' does the
-adjusted ECXENS and the adjusted-vs-raw comparison again and keeps the raw results. A product done again (also when its
+ranking and time series are reused, and a comparison (adjusted-vs-raw/, adjusted-era5l-vs-raw/) that is finished
+(.state-cmp-<tag>.json) is skipped unless raw ECXENS or that product was done again. So by default only what is missing
+is run, e.g. just the ERA5-Land adjusted product and its comparison when that is new. 'redo' as the third argument does everything again; 'redo-adjusted' does both adjusted
+products and their comparisons again and keeps the raw results; 'redo-era5l' only the ERA5-Land adjusted one. A product done again (also when its
 ECXENS files changed) first has its old folders removed (<pred>-adjusted/ for adjusted, the plain <pred>/ for raw),
 and adjusted-vs-raw/ is removed and made again whenever either product was done again.
 
@@ -17,10 +19,12 @@ One run validates both ECXENS products, each with the full set of results below,
 OUT_ROOT/<MODEL>/<BASE>/ (one page in SnowLook):
   raw ECXENS        -> <pred>/            ensmean, member01, driest-memberNN, wettest-memberNN, members, all
   ECXENS adjusted   -> <pred>-adjusted/   ensmean-adjusted, member01-adjusted, ..., members-adjusted, all-adjusted
+                       (SNOWCAP adjusted: ECXENS_<base>T120000_swe-adjusted-<m>.grib)
+  ECXENS adjusted to ERA5-Land -> <pred>-adjusted-era5l/   (ECXENS_<base>T180000_swe-adjusted-era5l-<m>.grib)
                        (adjust-snow-ecxens.py, ECXENS_<base>T120000_swe-adjusted-<m>.grib, split by prep-ecxens-validation.sh;
                        skipped with a message when not there), so every adjusted file has 'adjusted' in its name,
                        e.g. swe-ml-2_20191210_ensmean-adjusted_ecxens-swe_20191211.png
-  and the two against each other in adjusted-vs-raw/ (see the end of this text).
+  and each adjusted product against raw in adjusted-vs-raw/ and adjusted-era5l-vs-raw/ (see the end of this text).
   MODEL may be given with or without -adjusted. RUN_RAW / RUN_ADJUSTED switch either off (the other's results are kept).
 
 Inputs, as prep-ecxens-validation.sh writes them, in ECX_DIR (/home/ubuntu/data/cryoscope/snowmodel/ECXENS/):
@@ -87,7 +91,8 @@ from matplotlib.colors import ListedColormap, BoundaryNorm, LogNorm
 BASE = sys.argv[1] if len(sys.argv) > 1 else '20261121'       # forecast base date, YYYYMMDD
 MODEL = sys.argv[2] if len(sys.argv) > 2 else 'swe-ml-2'      # model edition that produced ECXENS (goes into every file name)
 REDO = 'redo' in sys.argv[3:]   # True: everything again; False: finished predictions skipped, existing pngs kept
-REDO_ADJ = REDO or 'redo-adjusted' in sys.argv[3:]   # adjusted ECXENS and the comparison again, raw kept
+REDO_ADJ = REDO or 'redo-adjusted' in sys.argv[3:]   # every adjusted product and its comparison again, raw kept
+REDO_ERA5L = REDO_ADJ or 'redo-era5l' in sys.argv[3:]  # the ERA5-Land adjusted product and its comparison again
 SKIP_PNG = not REDO             # per product: False when its ECXENS files changed since the last run
 ADJ_SUFFIX = '-adjusted'
 BASE_MODEL = MODEL[:-len(ADJ_SUFFIX)] if MODEL.endswith(ADJ_SUFFIX) else MODEL
@@ -95,12 +100,12 @@ RUN_RAW = True            # validate raw ECXENS        -> <MODEL>/<BASE>/<pred>/
 RUN_ADJUSTED = True       # validate ECXENS adjusted   -> <MODEL>/<BASE>/<pred>-adjusted/
 COMPARE_ADJUSTED = True   # adjusted against raw       -> <MODEL>/<BASE>/adjusted-vs-raw/
 MODEL = BASE_MODEL
-PRED_TAG = ''             # '' for raw, '-adjusted' while the adjusted product runs (set_product)
+PRED_TAG = ''             # '' for raw, the product's suffix ('-adjusted', '-adjusted-era5l') while it runs (set_product)
 MODEL_LABEL = MODEL       # model name in the figure titles ('swe-ml-2 adjusted' for the adjusted product)
 BASE_TIME = pd.Timestamp(BASE)
 BT = f'{BASE_TIME:%Y%m%dT%H%M%S}'
 BASE_TAG = f'{BASE_TIME:%Y%m%d}'
-_fill = dict(BT=BT, BT12=f'{BASE_TIME:%Y%m%d}T120000', MODEL=MODEL, Y=f'{BASE_TIME:%Y}')
+_fill = dict(BT=BT, BT12=f'{BASE_TIME:%Y%m%d}T120000', BT18=f'{BASE_TIME:%Y%m%d}T180000', MODEL=MODEL, Y=f'{BASE_TIME:%Y}')
 
 SNOW_ROOT = '/home/ubuntu/data/cryoscope/snowmodel/'
 ECX_DIR = SNOW_ROOT + 'ECXENS/'
@@ -111,11 +116,16 @@ OUTDIR = f'{OUT_ROOT}{MODEL}/{BASE_TAG}'
 PREFIX = f'{MODEL}_{BASE_TAG}'
 
 
-def set_product(adjusted):
-    """Outputs of the following steps: raw ECXENS (<pred>/) or ECXENS adjusted (<pred>-adjusted/)."""
+def set_product(tag=''):
+    """Outputs of the following steps: raw ECXENS (tag '', <pred>/) or an adjusted product (tag in ADJ_PRODUCTS, <pred><tag>/)."""
     global PRED_TAG, MODEL_LABEL
-    PRED_TAG = ADJ_SUFFIX if adjusted else ''
-    MODEL_LABEL = f"{MODEL} adjusted" if adjusted else MODEL
+    PRED_TAG = tag
+    MODEL_LABEL = f"{MODEL} {ADJ_PRODUCTS[tag]['label']}" if tag else MODEL
+
+
+def adj_tag_of(name):
+    """Adjusted product suffix a folder or prediction name ends with ('' for raw); the longest suffix first."""
+    return next((t for t in sorted(ADJ_PRODUCTS, key=len, reverse=True) if name.endswith(t)), '')
 
 
 def tagged(pred):
@@ -134,8 +144,16 @@ PRED_SUBFOLDERS = True      # True: OUTDIR/<pred>/ folders; False: everything fl
 # is found when the tag is given as the model, also when the plain members are in the same folder
 # ECXENS adjusted to HKL (adjust-snow-ecxens.py, joined as T120000 so SmartMet keeps it apart, split by prep-ecxens-validation.sh),
 # m = ensmean gives the ens mean file ECXENS_<base>T120000_swe-adjusted-ensmean.grib
-ADJ_TEMPLATES = ['ECXENS_{BT12}_swe-adjusted-{{m}}.grib']
+ADJ_TEMPLATES = ['ECXENS_{BT12}_swe-adjusted-{{m}}.grib', 'ECXENS_{BT18}_swe-adjusted-{{m}}.grib']
 ADJ_MEAN_TEMPLATES = []
+# adjusted products: prediction suffix -> files (adjust-snow-ecxens.py, split by prep-ecxens-validation.sh), names in titles
+# and the comparison folder
+ADJ_PRODUCTS = {
+    '-adjusted': dict(templates=ADJ_TEMPLATES, label='adjusted', name='ECXENS adjusted', cmp='adjusted-vs-raw'),
+    '-adjusted-era5l': dict(templates=['ECXENS_{BT18}_swe-adjusted-era5l-{{m}}.grib', 'ECXENS_{BT12}_swe-adjusted-era5l-{{m}}.grib'],
+                            label='adjusted ERA5-Land', name='ECXENS adjusted ERA5-Land', cmp='adjusted-era5l-vs-raw'),
+}
+CMP_DIRS = {v['cmp'] for v in ADJ_PRODUCTS.values()}
 ECX_TEMPLATES = [
                  'ECXENS_{BT}_swe-500-nd-{MODEL}-{{m}}.grib', 'ECXENS_{BT}_swe-500-nd_{MODEL}-{{m}}.grib',
                  'ECXENS_{BT}_swe-{{m}}.grib',
@@ -944,7 +962,7 @@ def validate(ecx, snowcap_raw, pred, name, ens=None, ens_name=None, ens500=None,
         return full or kind in MEMBER_KINDS
 
     with open(out_path(pred, "info", ext="json"), "w") as f:
-        json.dump({"model": MODEL, "base": BASE_TAG, "pred": tagged(pred), "name": name, "adjusted": bool(PRED_TAG),
+        json.dump({"model": MODEL, "base": BASE_TAG, "pred": tagged(pred), "name": name, "adjusted": bool(PRED_TAG), "product": PRED_TAG.lstrip("-") or "raw",
                    "ecens_name": ens_name if ens is not None else None, "ecens500": ens500 is not None}, f)
     if SAVE_PANELS:
         save_swe_legend(out_path(pred, "swe-legend"))
@@ -1519,9 +1537,9 @@ def clear_product():
     gone = []
     for d in sorted(os.listdir(OUTDIR)):
         full = os.path.join(OUTDIR, d)
-        if not os.path.isdir(full) or d.startswith('.') or d == "adjusted-vs-raw":
+        if not os.path.isdir(full) or d.startswith('.') or d in CMP_DIRS:
             continue
-        if d.endswith(ADJ_SUFFIX) == bool(PRED_TAG):
+        if adj_tag_of(d) == PRED_TAG:
             shutil.rmtree(full)
             gone.append(d)
     if gone:
@@ -1535,7 +1553,7 @@ def run_model(snowcap, snowcap_files, ecx_src, clms_on=False):
     os.makedirs(OUTDIR, exist_ok=True)
     st = read_state()
     mtime = ecx_src.mtime()
-    forced = REDO or (REDO_ADJ and bool(PRED_TAG))
+    forced = REDO or (REDO_ADJ and bool(PRED_TAG)) or (REDO_ERA5L and PRED_TAG == '-adjusted-era5l')
     changed = forced or (st.get("mtime") is not None and abs(st["mtime"] - mtime) > 1)
     SKIP_PNG = not changed      # first run with a state file: existing pngs are kept
     if changed:
@@ -1558,8 +1576,10 @@ def run_model(snowcap, snowcap_files, ecx_src, clms_on=False):
     has_members = len(ecx_src.members()) > 0
     want_rank = has_members and ADD_EXTREME_MEMBERS and (RERANK or changed or not os.path.exists(rank_csv))
     want_ts = has_members and MEMBER_TIMESERIES and (RETIMESERIES or changed or not os.path.exists(ts_csv))
-    want_ecx_mean = not ecx_src.has_mean_file
-    want_ens_mean = ens_src is not None and not ens_src.has_mean_file
+    prev_mean = st["preds"].get("ensmean")
+    mean_done = prev_mean is not None and prev_mean.get("clms") == (clms_on and not PRED_TAG)
+    want_ecx_mean = not ecx_src.has_mean_file and not mean_done   # done: computed later only if the comparison needs it
+    want_ens_mean = ens_src is not None and not ens_src.has_mean_file and not mean_done
     rk = ts_df = ecx_mean = ens_mean = None
     # raw ECENS member time series are the same for raw and adjusted ECXENS: kept in .ecens-members-timeseries.csv of the
     # run folder and read from there while the ECENS files are unchanged, so the ECENS members are read only once
@@ -1604,8 +1624,8 @@ def run_model(snowcap, snowcap_files, ecx_src, clms_on=False):
         if ts_df is None and os.path.exists(ts_csv):
             print(f"Reusing member time series: {ts_csv}")
             ts_df = pd.read_csv(ts_csv, parse_dates=["date"])
-            if not todo(out_path("members", "ecxens-timeseries")):
-                ts_df = None    # csv and plots there already
+            if not todo(out_path("members", "ecxens-timeseries")) and not todo(out_path("members", "ecxens-timeseries-regions")):
+                ts_df = None    # csv and plots (whole domain and regions) there already
         elif ts_df is not None:
             ts_df.to_csv(ts_csv, index=False, float_format="%.4f")
         if ts_df is not None:
@@ -1621,8 +1641,16 @@ def run_model(snowcap, snowcap_files, ecx_src, clms_on=False):
             return lambda: ens_mean if ens_mean is not None else (ens_src.load("ensmean") if ens_src.has_mean_file else None)
         return lambda: ens_src.load(m) if m in ens_members else None
 
-    preds = [("ensmean", "ECXENS ens mean" if has_members or ecx_src.split else "ECXENS",
-              (lambda: ecx_mean) if ecx_mean is not None else (lambda: ecx_src.load("ensmean")),
+    def ecx_mean_loader():
+        # ens mean of this product: from the member pass, the ens mean file, or the members read now (only when needed)
+        if ecx_mean is not None:
+            return ecx_mean
+        if ecx_src.has_mean_file or not has_members:
+            return ecx_src.load("ensmean")
+        print(f"{MODEL_LABEL}: computing the ECXENS ens mean from the members")
+        return scan_members(ecx_src, None, snowcap, False, True, False)[2]
+
+    preds = [("ensmean", "ECXENS ens mean" if has_members or ecx_src.split else "ECXENS", ecx_mean_loader,
               ens_loader("ensmean"), "ECENS ens mean",
               (lambda: load_field(e5_path, ECENS_SCALE)) if e5_path else (lambda: None))]
     members = ecx_src.members()
@@ -1639,7 +1667,7 @@ def run_model(snowcap, snowcap_files, ecx_src, clms_on=False):
             print(f"{label} member by {RANK_BY}: {m}")
 
     if PRED_TAG:   # adjusted product: names say so (shown in SnowLook and in the figure titles)
-        preds = [(lab, nm.replace("ECXENS", "ECXENS adjusted", 1)) + tuple(rest) for lab, nm, *rest in preds]
+        preds = [(lab, nm.replace("ECXENS", ADJ_PRODUCTS[PRED_TAG]['name'], 1)) + tuple(rest) for lab, nm, *rest in preds]
     # one run-info for both products: the keys of the product run now are replaced, the other's kept
     ri_path = os.path.join(OUTDIR, f"{PREFIX}_run-info.json")
     try:
@@ -1647,14 +1675,14 @@ def run_model(snowcap, snowcap_files, ecx_src, clms_on=False):
             info = json.load(f)
     except (OSError, ValueError):
         info = {}
-    key = "ecxens_adjusted" if PRED_TAG else "ecxens"
+    key = "ecxens" + PRED_TAG.replace("-", "_")
     info.update({"model": MODEL, "base_time": f"{BASE_TIME:%Y-%m-%d %H:%M}", "region": REGION,
                  f"{key}_file": os.path.basename(ecx_src.path), f"{key}_members": ecx_src.members(),
                  "ecens_file": os.path.basename(ens_src.path) if ens_src is not None else None,
                  "ecens500_file": os.path.basename(e5_path) if e5_path else None,
                  "snowcap_file": [os.path.basename(p) for p in snowcap_files],
                  "regions": {k: {"name": v[0], "country": v[1], "lat_from": v[2], "lat_to": v[3]} for k, v in REGIONS.items()}})
-    other = [x for x in info.get("preds", []) if x.endswith(ADJ_SUFFIX) != bool(PRED_TAG)]
+    other = [x for x in info.get("preds", []) if adj_tag_of(x) != PRED_TAG]
     info["preds"] = other + [tagged(p[0]) for p in preds]
     with open(ri_path, "w") as f:
         json.dump(info, f, indent=2)
@@ -1706,16 +1734,23 @@ def _read(path, **kw):
     return pd.read_csv(path, **kw) if os.path.exists(path) else None
 
 
-def compare_adjusted(snowcap, load_raw, load_adj):
-    """Adjusted ECXENS against raw ECXENS (their csv files in <pred>/ and <pred>-adjusted/) into adjusted-vs-raw/."""
-    pred = "adjusted-vs-raw"
-    rn, an = f"ECXENS raw ({MODEL})", f"ECXENS adjusted ({MODEL})"
+def cmp_state(atag):
+    """Marker of a finished comparison of one adjusted product (written at the end of compare_adjusted)."""
+    return os.path.join(OUTDIR, f".state-cmp{atag}.json")
+
+
+def compare_adjusted(snowcap, load_raw, load_adj, atag="-adjusted"):
+    """An adjusted product against raw ECXENS (their csv files in <pred>/ and <pred><atag>/) into its comparison folder
+    (adjusted-vs-raw/, adjusted-era5l-vs-raw/). The file kinds are the same for every product, the folder tells them apart."""
+    P = ADJ_PRODUCTS[atag]
+    pred = P["cmp"]
+    rn, an = f"ECXENS raw ({MODEL})", f"{P['name']} ({MODEL})"
     tag = f"ens mean, SWE {FINE_GRID}, base {BASE_TIME:%Y-%m-%d}"
     print(f"\n=== {an} against {rn} ===")
 
     # ---- scores per lead day
     mr = _read(prev_path("ensmean", "ecxens-metrics", "csv"))
-    ma = _read(prev_path("ensmean-adjusted", "ecxens-metrics", "csv"))
+    ma = _read(prev_path("ensmean" + atag, "ecxens-metrics", "csv"))
     if mr is not None and ma is not None:
         m = mr.merge(ma, on=["date", "lead_day"], suffixes=("_raw", "_adj"))
         m["skill_mse_adj_vs_raw"] = 1 - m["rmse_adj"] ** 2 / m["rmse_raw"] ** 2
@@ -1737,7 +1772,7 @@ def compare_adjusted(snowcap, load_raw, load_adj):
                 series.append((L, m[f"ecens500_{sc}_raw"], "^:", e5))
             lead_plot(out_path(pred, f"adjusted-vs-raw-score-{sc}"), f"{title}\n{tag}", series, zero=zero,
                       legend_kw=dict(fontsize=8))
-        lead_plot(out_path(pred, "adjusted-vs-raw-score-skill"), f"MSE skill of ECXENS adjusted (1 = perfect, 0 = as the reference)\n{tag}",
+        lead_plot(out_path(pred, "adjusted-vs-raw-score-skill"), f"MSE skill of {P['name']} (1 = perfect, 0 = as the reference)\n{tag}",
                   [(L, m["skill_mse_adj_vs_raw"], "o-", f"against {rn}")]
                   + ([(L, m["skill_mse_adj_vs_ecens500"], "s--", f"against {e5}")] if has5 else []), zero=True)
         cols = [c for c in ["lead_day", "bias_raw", "bias_adj", "rmse_raw", "rmse_adj", "ecens500_rmse_raw", "skill_mse_adj_vs_raw"] if c in m]
@@ -1747,7 +1782,7 @@ def compare_adjusted(snowcap, load_raw, load_adj):
 
     # ---- domain mean time series
     tr = _read(prev_path("ensmean", "domain-mean-timeseries", "csv"), parse_dates=["date"])
-    ta = _read(prev_path("ensmean-adjusted", "domain-mean-timeseries", "csv"), parse_dates=["date"])
+    ta = _read(prev_path("ensmean" + atag, "domain-mean-timeseries", "csv"), parse_dates=["date"])
     if tr is not None and ta is not None:
         t = tr.merge(ta[["date", "ecxens"]].rename(columns={"ecxens": "ecxens_adjusted"}), on="date", how="outer").sort_values("date")
         t.to_csv(out_path(pred, "adjusted-vs-raw-domain-mean-timeseries", ext="csv"), index=False, float_format="%.4f")
@@ -1772,7 +1807,7 @@ def compare_adjusted(snowcap, load_raw, load_adj):
 
     # ---- regions: time series and scores
     rr = _read(prev_path("ensmean", "domain-mean-timeseries-regions", "csv"), parse_dates=["date"])
-    ra = _read(prev_path("ensmean-adjusted", "domain-mean-timeseries-regions", "csv"), parse_dates=["date"])
+    ra = _read(prev_path("ensmean" + atag, "domain-mean-timeseries-regions", "csv"), parse_dates=["date"])
     if rr is not None and ra is not None:
         r = rr.merge(ra[["date", "region", "ecxens"]].rename(columns={"ecxens": "ecxens_adjusted"}), on=["date", "region"], how="outer")
         keys = [k for k in REGIONS if k in set(r["region"])]
@@ -1791,11 +1826,11 @@ def compare_adjusted(snowcap, load_raw, load_adj):
             date_ticks(ax, dates)
         axes[0].set_ylabel("domain mean SWE (mm)")
         axes[0].legend(fontsize=7)
-        fig.suptitle(f"Domain mean SWE per region, ECXENS raw and adjusted, {tag}")
+        fig.suptitle(f"Domain mean SWE per region, ECXENS raw and {P['label']}, {tag}")
         fig.savefig(out_path(pred, "adjusted-vs-raw-timeseries-regions"), dpi=DPI)
         plt.close(fig)
     sr = _read(prev_path("ensmean", "regions-metrics", "csv"))
-    sa = _read(prev_path("ensmean-adjusted", "regions-metrics", "csv"))
+    sa = _read(prev_path("ensmean" + atag, "regions-metrics", "csv"))
     if sr is not None and sa is not None:
         keys = [k for k in REGIONS if k in set(sr["region"]) | set(sa["region"])]
         gr = sr.groupby("region").mean(numeric_only=True).reindex(keys)
@@ -1808,7 +1843,7 @@ def compare_adjusted(snowcap, load_raw, load_adj):
         names = [REGIONS[k][0] for k in keys]
         for ax, (sc, title) in zip(axes[:2], [("rmse", "RMSE (mm)"), ("bias", "bias, forecast minus SNOWCAP (mm)")]):
             ax.bar(x - wbar * (nb - 1) / 2, gr[sc], wbar, label="ECXENS raw", color="tab:blue")
-            ax.bar(x - wbar * (nb - 1) / 2 + wbar, ga[sc], wbar, label="ECXENS adjusted", color="tab:green")
+            ax.bar(x - wbar * (nb - 1) / 2 + wbar, ga[sc], wbar, label=P["name"], color="tab:green")
             if has5:
                 ax.bar(x + wbar, gr[f"ecens500_{sc}"], wbar, label="ECENS remapped", color="tab:orange")
             ax.set_xticks(x)
@@ -1835,13 +1870,13 @@ def compare_adjusted(snowcap, load_raw, load_adj):
 
     # ---- member spread of both against SNOWCAP (whole domain)
     mr = _read(prev_path("members", "timeseries", "csv"), parse_dates=["date"])
-    ma = _read(prev_path("members-adjusted", "timeseries", "csv"), parse_dates=["date"])
+    ma = _read(prev_path("members" + atag, "timeseries", "csv"), parse_dates=["date"])
     if mr is not None and ma is not None:
         def sel(df, src):
             d = df[df["source"] == src]
             return d[d["region"] == "all"] if "region" in d else d
         fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
-        for df, lab, col in [(mr, "ECXENS raw", "tab:blue"), (ma, "ECXENS adjusted", "tab:green")]:
+        for df, lab, col in [(mr, "ECXENS raw", "tab:blue"), (ma, P["name"], "tab:green")]:
             d = sel(df, "ECXENS")
             if d.empty:
                 continue
@@ -1852,7 +1887,7 @@ def compare_adjusted(snowcap, load_raw, load_adj):
         if not h.empty:
             ax.plot(h["date"], h["swe_mm"], color="red", lw=2.5, marker="o", label="SNOWCAP")
         ax.set_ylabel("domain mean SWE (mm)")
-        ax.set_title(f"ECXENS members raw and adjusted vs SNOWCAP, SNOWCAP domain, base {BASE_TIME:%Y-%m-%d}")
+        ax.set_title(f"ECXENS members raw and {P['label']} vs SNOWCAP, SNOWCAP domain, base {BASE_TIME:%Y-%m-%d}")
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
         fig.savefig(out_path(pred, "adjusted-vs-raw-members-timeseries"), dpi=DPI)
@@ -1865,7 +1900,7 @@ def compare_adjusted(snowcap, load_raw, load_adj):
     raw, adj = load_raw(), load_adj()
     if raw is None or adj is None:
         return
-    adj = match_grid(raw, adj, "ECXENS adjusted")
+    adj = match_grid(raw, adj, P["name"])
     sc = match_snowcap(raw, snowcap) if snowcap is not None else None
     sc_times = sc.valid_time.values if sc is not None else np.array([], dtype="datetime64[ns]")
     shape = (raw.sizes["latitude"], raw.sizes["longitude"])
@@ -1888,12 +1923,14 @@ def compare_adjusted(snowcap, load_raw, load_adj):
     period = f"{pd.Timestamp(times[0]):%Y-%m-%d} to {pd.Timestamp(times[-1]):%Y-%m-%d}" if times else ""
     with np.errstate(invalid="ignore", divide="ignore"):
         save_bias_map(out_path(pred, "adjustment-mean"), np.where(cnt_a > 0, sum_a / cnt_a, np.nan), extent, aspect, lines,
-                      f"Mean adjustment, ECXENS adjusted minus raw SWE ({FINE_GRID})\n{period}", label="mm")
+                      f"Mean adjustment, {P['name']} minus raw SWE ({FINE_GRID})\n{period}", label="mm")
         if cnt_g.any():
             save_bias_map(out_path(pred, "adjusted-vs-raw-mae-gain"), np.where(cnt_g > 0, sum_g / cnt_g, np.nan), extent, aspect, lines,
-                          f"|adjusted bias| minus |raw bias| vs SNOWCAP SWE ({FINE_GRID})\n{period}, {int(cnt_g.max())} SNOWCAP days",
+                          f"|{P['label']} bias| minus |raw bias| vs SNOWCAP SWE ({FINE_GRID})\n{period}, {int(cnt_g.max())} SNOWCAP days",
                           label="mm, negative = adjusting helped")
     print(f"comparison done, outputs in {os.path.join(OUTDIR, pred)}/")
+    with open(cmp_state(atag), "w") as f:
+        json.dump({"finished": f"{pd.Timestamp.now():%Y-%m-%d %H:%M}"}, f)
 
 
 # ---------------------------------------------------------------- main
@@ -1907,33 +1944,46 @@ def main():
     redone = False
     raw_src = find_source("ECXENS", [ECX_DIR], ECX_TEMPLATES, ECX_SCALE, ECX_MEAN_TEMPLATES)
     if RUN_RAW:
-        set_product(False)
+        set_product()
         if raw_src is None:
             print(f"no raw ECXENS forecast for {BASE_TIME:%Y-%m-%d} in {ECX_DIR}, raw left out")
         else:
             loaders["raw"], r = run_model(snowcap, snowcap_files, raw_src, clms_on)
             redone |= r
+    redone_tag = {}
+    srcs = {}
     if RUN_ADJUSTED:
-        set_product(True)
-        adj_src = find_source("ECXENS", [ECX_DIR], ADJ_TEMPLATES, ECX_SCALE, ADJ_MEAN_TEMPLATES)
-        if adj_src is None:
-            print(f"no adjusted ECXENS ({ADJ_TEMPLATES[0].format(**_fill).format(m='<n>')}) in {ECX_DIR}, adjusted left out; "
-                  f"run adjust-snow-ecxens.py and prep-ecxens-validation.sh {BASE_TAG} first")
-        else:
-            loaders["adj"], r = run_model(snowcap, snowcap_files, adj_src)
-            redone |= r
-    set_product(False)
-    SKIP_PNG = not (REDO or REDO_ADJ or redone)     # new results: the comparison is drawn again, from an empty folder
-    cmp_dir = os.path.join(OUTDIR, "adjusted-vs-raw")
-    if not SKIP_PNG and os.path.isdir(cmp_dir):
-        shutil.rmtree(cmp_dir)
-        print("removed the earlier adjusted-vs-raw results")
-    if COMPARE_ADJUSTED and os.path.exists(prev_path("ensmean", "info", "json")) and os.path.exists(prev_path("ensmean-adjusted", "info", "json")):
-        def load_from(src):
-            return (lambda: src.load("ensmean")) if src is not None and src.has_mean_file else (lambda: None)
-        if "adj" not in loaders:
-            loaders["adj"] = load_from(find_source("ECXENS", [ECX_DIR], ADJ_TEMPLATES, ECX_SCALE, ADJ_MEAN_TEMPLATES))
-        compare_adjusted(snowcap, loaders.get("raw") or load_from(raw_src), loaders["adj"])
+        for atag, P in ADJ_PRODUCTS.items():
+            set_product(atag)
+            srcs[atag] = find_source("ECXENS", [ECX_DIR], P["templates"], ECX_SCALE, ADJ_MEAN_TEMPLATES)
+            if srcs[atag] is None:
+                print(f"no {P['name']} ({P['templates'][0].format(**_fill).format(m='<n>')}) in {ECX_DIR}, left out; "
+                      f"run adjust-snow-ecxens.py and prep-ecxens-validation.sh {BASE_TAG} first")
+                continue
+            loaders[atag], r = run_model(snowcap, snowcap_files, srcs[atag])
+            redone_tag[atag] = r
+    set_product()
+
+    def load_from(src):
+        return (lambda: src.load("ensmean")) if src is not None and src.has_mean_file else (lambda: None)
+    for atag, P in ADJ_PRODUCTS.items():
+        # new results of raw or of this product: its comparison is drawn again, from an empty folder
+        SKIP_PNG = not (REDO or REDO_ADJ or (REDO_ERA5L and atag == '-adjusted-era5l') or redone or redone_tag.get(atag))
+        cmp_dir = os.path.join(OUTDIR, P["cmp"])
+        if not SKIP_PNG:
+            if os.path.isdir(cmp_dir):
+                shutil.rmtree(cmp_dir)
+                print(f"removed the earlier {P['cmp']} results")
+            if os.path.exists(cmp_state(atag)):
+                os.remove(cmp_state(atag))
+        elif os.path.exists(cmp_state(atag)) or os.path.exists(prev_path(P["cmp"], "adjusted-vs-raw-metrics", "csv")):
+            # finished (a comparison from before the marker existed counts as finished when its scores are there)
+            print(f"\n=== {P['cmp']}: done in an earlier run, skipped ('redo-adjusted' or 'redo-era5l' does it again) ===")
+            continue
+        if COMPARE_ADJUSTED and os.path.exists(prev_path("ensmean", "info", "json")) and os.path.exists(prev_path("ensmean" + atag, "info", "json")):
+            if atag not in loaders:
+                loaders[atag] = load_from(srcs.get(atag) or find_source("ECXENS", [ECX_DIR], P["templates"], ECX_SCALE, ADJ_MEAN_TEMPLATES))
+            compare_adjusted(snowcap, loaders.get("raw") or load_from(raw_src), loaders[atag], atag)
     if MANIFEST:
         write_manifest()
     if not loaders:
