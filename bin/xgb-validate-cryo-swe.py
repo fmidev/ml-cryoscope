@@ -55,6 +55,9 @@ me_max=75.0           # mm, fixed symmetric colour scale for ME maps
 run_shap=True
 shap_n=5000           # rows sampled for SHAP
 save_predictions=True   # writes all predictions to SWE_xgboost_validation_<model>model.csv.gz (large, slow; used by the app's Validation explorer)
+# day of year features doy_sin and doy_cos are optional, as DROP_TIME in the training script: False = not computed, and models
+# trained with them (swe-ml-2 and older) are skipped; True = computed, so those models can be validated again
+TIME_FEATURES=False
 
 def model_stem(tag): return f'{variant}_{train_domain}_{tag}'
 def out_dir(tag): return f'{base_dir}validationresults_{tag}/'
@@ -122,6 +125,9 @@ for tag in tags:
         tlog(f'{tag}: WARNING no hyperparams file {hf}, season split info will be empty')
     if hp.get('features') and list(hp['features'])!=list(fn):
         tlog(f"{tag}: WARNING feature list in hyperparams differs from the model file: only in json {sorted(set(hp['features'])-set(fn))}, only in model {sorted(set(fn)-set(hp['features']))}")
+    tf=sorted(derived&set(fn))
+    if tf and not TIME_FEATURES:
+        skipped[tag]=f'model uses the time features {tf}, set TIME_FEATURES=True to validate it'; continue
     miss=[c for c in needed(fn) if file_col(c) is None]
     if miss:
         skipped[tag]=f'columns missing in validation file: {miss}'; continue
@@ -151,9 +157,11 @@ df['SWE']=df['SWE'].clip(lower=0.0)
 for c in ['swe_mean','swe_max']:
     if c in df: df[c]=df[c].clip(lower=0.0)
 df['utctime']=pd.to_datetime(df['utctime'])
-doy=df['utctime'].dt.dayofyear
-df['doy_cos']=np.cos(2*np.pi*doy/365.25)
-df['doy_sin']=np.sin(2*np.pi*doy/365.25)
+if TIME_FEATURES:
+    doy=df['utctime'].dt.dayofyear
+    df['doy_cos']=np.cos(2*np.pi*doy/365.25)
+    df['doy_sin']=np.sin(2*np.pi*doy/365.25)
+    del doy
 
 # lag-1: previous day's value at the SAME location; NaN if that day is missing
 tlog('building lag features')
