@@ -1,6 +1,7 @@
 sources:
   era5+l:
     origintime: 20000101T000000
+    batch: 5000
     features:
       e
       slhf

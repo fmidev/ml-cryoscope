@@ -5,7 +5,7 @@
 #   Final model:                Training and model performance, Independent validation   (only the final model, USED_MODEL, swe-ml-2)
 #   All model versions:         Training explorer, Validation explorer                   (every model edition)
 #   SWE predictions (past):     15 days (500 m), seasonal 215 days (2.8 km), seasonal 215 days (9 km)   (final model, divided by start date)
-#   Compare model predictions:  10 and 15 days, seasonal                                  (every model edition; hidden for now, commented out in NAV)
+#   Compare model predictions:  10 and 15 days, seasonal                                  (every model edition, swe-ml-3 included)
 #   Latest SWE predictions:     web map with SmartMet WMS layers; click a spot for its ECXENS and ECXSF member time series
 # reads the outputs of the tuning script (models/, results/), the validation script (validationresults_<optuna_tag>/, one folder per model)
 # the ECXENS (15 days) vs SNOWCAP forecast validation script cryo-ecxens-performance.py (ecxens_validation/<model>/<start date>/<prediction>/,
@@ -152,7 +152,7 @@ FC_METRICS={'bias':('bias (forecast minus HKL)','mm'),'mae':('MAE','mm'),'rmse':
 
 # start dates (cases) of the final model on the SWE predictions (past) pages: region -> {start date: (what the case tests, out of training seasons)}
 # out of training = True is marked with ★. Results for start dates not listed here still show up, without a description.
-# ECXENS starts (15 days for swe-ml-2), 00 UTC, 1 to 3 days before the event
+# ECXENS starts (15 days), 00 UTC, 1 to 3 days before the event
 FC_CASES={
     'Alps':{
         '2018-01-19':('level 5 snowfall, rain at lower elevations',False),
@@ -306,10 +306,9 @@ OVERVIEW_SECTIONS=[
         ('15 days (500 m)','prediction-15-days','ECXENS forecasts: the downscaled 15 day EC ensemble, daily'),
         ('Seasonal 215 days (2.8 km)','prediction-seasonal-2p8km','ECXSF monthly means: the downscaled EC seasonal forecast on the 2.8 km grid'),
         ('Seasonal 215 days (9 km)','prediction-seasonal-9km','ECXSF monthly means over Europe against ERA5-Land, with time series and scores per region')]),
-    # Compare model predictions hidden for now (also in NAV at the end of the file)
-    # ('Compare model predictions','model editions side by side','#7a6a9e',[
-    #     ('10 and 15 days','compare-10-15-days','ECXENS of several model editions side by side (older editions 10 days, swe-ml-2 15 days), or any edition in detail'),
-    #     ('Seasonal','compare-seasonal','ECXSF of several model editions side by side (2.8 km, 9 km or both), or any edition in detail')]),
+    ('Compare model predictions','model editions side by side, swe-ml-3 included','#7a6a9e',[
+        ('10 and 15 days','compare-10-15-days','ECXENS of several model editions side by side (older editions 10 days, swe-ml-2 and swe-ml-3 15 days), or any edition in detail'),
+        ('Seasonal','compare-seasonal','ECXSF of several model editions side by side (2.8 km, 9 km or both), or any edition in detail')]),
 ]
 # colours inherit the light or dark theme; only the thin accent bar and the hover tint carry the section colour
 OVERVIEW_CSS=(
@@ -1721,8 +1720,7 @@ def fc_case_scores(r):
     d=fc_read_metrics(p)
     if d is None: return {}
     out={}
-    for k,l in [('bias','bias (mm)'),('rmse','RMSE (mm)'),('kge','KGE'),('csi_1','CSI 1 mm'),('skill_mse_vs_ecens','MSE skill vs ECENS'),
-                ('skill_mse_vs_ecens500','MSE skill vs ECENS 500 m')]:
+    for k,l in [('bias','bias (mm)'),('rmse','RMSE (mm)'),('kge','KGE'),('csi_1','CSI 1 mm'),('skill_mse_vs_ecens','MSE skill vs ECENS')]:
         if k in d: out[l]=d[k].mean()
     return out
 
@@ -3688,9 +3686,8 @@ NAV={'':[('Overview','Overview',page_overview,'overview')],
      'SWE predictions (past)':[('SWE predictions (past): 15 days (500 m)','15 days (500 m)',page_forecasts,'prediction-15-days'),
                                ('SWE predictions (past): seasonal 215 days (2.8 km)','seasonal 215 days (2.8 km)',page_seasonal_28,'prediction-seasonal-2p8km'),
                                ('SWE predictions (past): seasonal 215 days (9 km)','seasonal 215 days (9 km)',page_seasonal_9,'prediction-seasonal-9km')],
-     # Compare model predictions hidden for now (page code kept); uncomment the two lines below and the OVERVIEW_SECTIONS entry to show it again
-     # 'Compare model predictions':[('Compare model predictions: 10 and 15 days','10 and 15 days',page_compare,'compare-10-15-days'),
-     #                              ('Compare model predictions: seasonal','seasonal',page_compare_seasonal,'compare-seasonal')],
+     'Compare model predictions':[('Compare model predictions: 10 and 15 days','10 and 15 days',page_compare,'compare-10-15-days'),
+                                  ('Compare model predictions: seasonal','seasonal',page_compare_seasonal,'compare-seasonal')],
      }
 # the menu is drawn by the app itself (navigation hidden), so it sits under the sidebar title and not above it;
 # streamlit versions without the hidden position get streamlit's own menu at the top of the sidebar

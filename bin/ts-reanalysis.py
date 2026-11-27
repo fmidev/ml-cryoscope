@@ -7,7 +7,7 @@ import os, sys, json
 import requests
 import pandas as pd
 import numpy as np
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, quote
 try:
     import yaml
 except ImportError:
@@ -15,7 +15,7 @@ except ImportError:
 
 # ---------------------------------------------------------------- settings
 TAGS = ('training', 'validation')
-path = '/home/users/smartmet/data/snowmodel/'
+path = '/home/ubuntu/data/cryoscope/snowmodel/'
 REGION = 'scandi_alps'
 BATCH = 5000             # locations per request, unless the source or the yml (batch: 2000) gives its own
 DEFAULT_HOURS = '0'      # hour= of the request: 00 UTC
@@ -67,10 +67,10 @@ SOURCES = {
         'v10': 'V10-MS:ERA5L:5099:1:0:1:0',
         'tp': 'RR-M:ERA5L:5099:1:0:1:0',              # total precipitation
     }),
-    'era5ld': dict(url='http://sm.cryo-scope.eu:8080', product='ERA5LD', batch=2000, keys={
+    'era5ld': dict(url='https://sm.cryo-scope.eu', product='ERA5LD', batch=2000, keys={
         'tmax': 'T2-K:ERA5LD:5093:1:0:1',             # daily 2 m temperature statistics
     }),
-    'era5+l': dict(url='http://sm.cryo-scope.eu:8080', product='ERA5+L', batch=2000, keys={
+    'era5+l': dict(url='https://sm.cryo-scope.eu', product='ERA5+L', batch=2000, keys={
         'fal': 'ALBEDOSLR-0TO1:ERA5+L:5109:1:0:1',
         'asn': 'ASN-0TO1:ERA5+L:5109:1:0:1',
         'laihv': 'LAI_HV-M2M2:ERA5+L:5109:1:0:1',
@@ -108,10 +108,10 @@ if TAG not in TAGS:
     raise SystemExit(f'usage: python {os.path.basename(sys.argv[0])} <{"|".join(TAGS)}> [config.yml] [source ...]')
 rest = args[1:]
 CONFIG = rest.pop(0) if rest and rest[0].endswith(('.yml', '.yaml')) else \
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'snowmodel-features.yml')
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'era5l_features.yml')
 ONLY = rest
 
-lonlats_file = f'{path}snowcap_scandi_alps_{TAG}_lonlats.txt'
+lonlats_file = f'{path}snowcap_scandi_alps_{TAG}_20000_lonlats.txt'
 output_dir = f'{path}{TAG}_inputs/reanalysis/'
 yearly_dir = os.path.join(output_dir, 'yearly')
 
@@ -275,7 +275,7 @@ def fetch_feature(feat, fmikey, S, locs, Y, X):
         print(f'fetching {feat} {Y}-{X} {ys[:8]}-{ye[:8]}')
         q1 = (f"{S['url']}/timeseries"
               f"?wkt={wkt_param}"
-              f"&param=utctime,latitude,longitude,{fmikey} as {col}"
+              f"&param=utctime,latitude,longitude,{quote(fmikey, safe=':')}%20as%20{col}"
               f"&starttime={ys}Z&endtime={ye}Z&hour={S['hours']}"
               f"&format=json&precision=full&timeformat=sql&tz=utc"
               + (f"&origintime={S['origintime']}" if S['origintime'] else ''))
@@ -293,6 +293,7 @@ def fetch_feature(feat, fmikey, S, locs, Y, X):
         df_year['longitude'] = df_year['longitude'].astype(str)
         has_data = not df_year.dropna().empty
         print(f'  {len(df_year.dropna())} rows with data')
+        print(df_year)
 
         if has_data or EMPTY_MARKER:
             df_year.to_csv(year_file, index=False)
