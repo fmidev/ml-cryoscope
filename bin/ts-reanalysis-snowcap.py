@@ -16,6 +16,7 @@ except ImportError:
 # ---------------------------------------------------------------- settings
 TAGS = ('training', 'validation')
 path = '/home/ubuntu/data/cryoscope/snowmodel/'
+DATASET = 'snowcap'       # target dataset tag in every output and checkpoint file name (snowcap | clms)
 REGION = 'scandi_alps'
 BATCH = 5000             # locations per request, unless the source or the yml (batch: 2000) gives its own
 DEFAULT_HOURS = '0'      # hour= of the request: 00 UTC
@@ -252,7 +253,7 @@ def wkt_of(locs):
 def fetch_feature(feat, fmikey, S, locs, Y, X):
     """One feature for one batch of locations, year by year with checkpoints, then one file for the whole period."""
     col = feat
-    stem = f"{S['product']}_{feat}_{REGION}_{Y}-{X}"
+    stem = f"{S['product']}_{feat}_{DATASET}_{REGION}_{Y}-{X}"
     out = os.path.join(output_dir, f"{stem}_{start[:8]}-{end[:8]}_{S['kind']}.csv")
     if os.path.exists(out):
         print(f'skipping (exists): {os.path.basename(out)}')
@@ -323,7 +324,7 @@ def main():
     os.makedirs(yearly_dir, exist_ok=True)
 
     locs = read_lonlats(lonlats_file)
-    print(f'{TAG}: {len(locs)} locations from {lonlats_file}')
+    print(f'{DATASET} {TAG}: {len(locs)} locations from {lonlats_file}')
     print(locs.head(3).to_string(index=False))
     print(f'config {CONFIG} | sources: {", ".join(run)} | period {start[:8]} to {end[:8]} | outputs in {output_dir}')
 
