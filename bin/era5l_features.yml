@@ -18,6 +18,7 @@ sources:
       t2
   era5:
     origintime: 20000101T000000
+    batch: 2000
     features:
       t500
       t700
