@@ -1,19 +1,23 @@
 sources:
-  "https://sm.cryo-scope.eu":
+  era5+l:
     origintime: 20000101T000000
     features:
-      # ERA5+L 24 h aggregates at 00 UTC
-      e:    "EVAP-M:ERA5L:5099:1:0:1:0"
-      slhf: "FLLAT-JM2:ERA5L:5099:1:0:1:0"
-      sshf: "FLSEN-JM2:ERA5L:5099:1:0:1:0"
-      str:  "RNETLWA-JM2:ERA5L:5099:1:0:1:0"
-      ssr:  "RNETSWA-JM2:ERA5L:5099:1:0:1:0"
-      ro:   "RO-M:ERA5L:5099:1:0:1:0"
-      sf:   "SNACC-KGM2:ERA5L:5099:1:0:1:0"
-      tp:   "RR-M:ERA5L:5099:1:0:1:0"
-      tmax: ""
-      # ERA5+L instant values at 00 UTC
-      sd:   "SD-M:ERA5+L:5109:1:0:1"
-      rsn:  "SND-KGM3:ERA5+L:5109:1:0:1"
-      stl1: "STL1-K:ERA5+L:5109:9:7:1"
-      t2:   "T2-K:ERA5+L:5109:1:0:1"
+      e
+      slhf
+      sshf
+      str
+      ssr
+      ro
+      sf
+      tp
+      tmax
+      sd
+      rsn
+      stl1
+      t2
+  era5:
+    origintime: 20000101T000000
+    features:
+      t500
+      t700
+      t850
