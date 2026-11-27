@@ -6,9 +6,12 @@ Validate ECXENS SWE forecasts against SNOWCAP SWE (Scandinavia 500 m), CryoSCOPE
 
 usage: python cryo-ecxens-performance.py [BASE] [MODEL] [redo | redo-adjusted | redo-era5l]      e.g. python cryo-ecxens-performance.py 20191210 swe-ml-2
 
-Finished work is not done again: a prediction whose results exist (and whose ECXENS files have not changed since,
-.state-raw.json / .state-adjusted.json in the run folder) is skipped, existing pngs are not redrawn and the member
-ranking and time series are reused, and a comparison (adjusted-vs-raw/, adjusted-era5l-vs-raw/) that is finished
+The first run computes everything. A later run computes only what is missing: every prediction keeps in the state file
+(.state-raw.json / .state-adjusted.json in the run folder) the inputs it was made from (ECXENS, ECENS, ECENS remapped to
+500 m, SNOWCAP and CLMS files with their modification times). A prediction whose inputs are the same is skipped; one with a
+new input (e.g. the 500 m ECENS file made after the first run, or a state file from before this check) is validated again
+with its existing pngs kept, so only the missing figures and scores are made; one whose earlier input changed (e.g. a new
+SNOWCAP file) is validated again with every figure redrawn. The member ranking and time series are reused, and a comparison (adjusted-vs-raw/, adjusted-era5l-vs-raw/) that is finished
 (.state-cmp-<tag>.json) is skipped unless raw ECXENS or that product was done again. So by default only what is missing
 is run, e.g. just the ERA5-Land adjusted product and its comparison when that is new. 'redo' as the third argument does everything again; 'redo-adjusted' does both adjusted
 products and their comparisons again and keeps the raw results; 'redo-era5l' only the ERA5-Land adjusted one. A product done again (also when its
@@ -1528,6 +1531,35 @@ def write_state(st):
         json.dump(st, f, indent=2)
 
 
+def _ftime(p):
+    return int(round(os.path.getmtime(p))) if p and os.path.exists(p) else None
+
+
+def input_sig(ecx_src, ens_src, e5_path, snowcap_files, label, use_clms):
+    """Inputs one prediction is made from, with their modification times: a change in any of them makes it be done again."""
+    sig = {"ecxens": int(round(ecx_src.mtime())),
+           "ecens": int(round(ens_src.mtime())) if ens_src is not None else None,
+           "snowcap": sorted([os.path.basename(f), _ftime(f)] for f in snowcap_files) or None,
+           "clms": bool(use_clms)}
+    if label == "ensmean":      # the 500 m ECENS file is used by the ens mean only
+        sig["ecens500"] = [os.path.basename(e5_path), _ftime(e5_path)] if e5_path else None
+    return sig
+
+
+def sig_change(prev, sig):
+    """'same': nothing to do; 'new': inputs added (or no record of the inputs), keep the pngs and make the missing ones;
+    'changed': an input used before changed, redraw everything of this prediction."""
+    old = (prev or {}).get("sig")
+    if old == sig:
+        return "same"
+    if old is None:
+        return "new"
+    for k, v in sig.items():
+        if old.get(k) not in (None, False) and old.get(k) != v:
+            return "changed"
+    return "new"
+
+
 def clear_product():
     """Removes the result folders of the current product before it is done again, so nothing of the earlier run is left
     (e.g. a driest or wettest member folder of another member number): adjusted: every <pred>-adjusted/; raw: every plain
@@ -1577,7 +1609,8 @@ def run_model(snowcap, snowcap_files, ecx_src, clms_on=False):
     want_rank = has_members and ADD_EXTREME_MEMBERS and (RERANK or changed or not os.path.exists(rank_csv))
     want_ts = has_members and MEMBER_TIMESERIES and (RETIMESERIES or changed or not os.path.exists(ts_csv))
     prev_mean = st["preds"].get("ensmean")
-    mean_done = prev_mean is not None and prev_mean.get("clms") == (clms_on and not PRED_TAG)
+    mean_sig = input_sig(ecx_src, ens_src, e5_path, snowcap_files, "ensmean", clms_on and not PRED_TAG)
+    mean_done = sig_change(prev_mean, mean_sig) == "same" and os.path.exists(prev_path(tagged("ensmean"), "info", "json"))
     want_ecx_mean = not ecx_src.has_mean_file and not mean_done   # done: computed later only if the comparison needs it
     want_ens_mean = ens_src is not None and not ens_src.has_mean_file and not mean_done
     rk = ts_df = ecx_mean = ens_mean = None
@@ -1689,17 +1722,24 @@ def run_model(snowcap, snowcap_files, ecx_src, clms_on=False):
 
     all_dfs = []
     redone = False
+    skip_png_product = SKIP_PNG
     for label, name, load_ecx, load_ens, ens_name, load_e5 in preds:
         use_clms = clms_on and label == "ensmean" and not PRED_TAG
         prev = st["preds"].get(label)
-        if prev is not None and prev.get("clms") == use_clms:
-            print(f"\n=== {name}: done in an earlier run, skipped ('redo' as the third argument does it again) ===")
+        sig = input_sig(ecx_src, ens_src, e5_path, snowcap_files, label, use_clms)
+        how = sig_change(prev, sig)
+        if how == "same" and os.path.exists(prev_path(tagged(label), "info", "json")):
+            print(f"\n=== {name}: done in an earlier run with the same inputs, skipped ('redo' as the third argument does it again) ===")
             df = _read(prev_path(tagged(label), "ecxens-metrics", "csv"))
             if df is not None:
                 all_dfs.append(df.assign(pred=label))
             continue
         redone = True
-        print(f"\n=== {name} ===")
+        # new inputs only: existing pngs kept, the missing ones made; an input used before changed: every png redrawn
+        SKIP_PNG = skip_png_product and how != "changed"
+        print(f"\n=== {name} ===" + ("" if prev is None else
+              "  (an input changed since the last run, done again)" if how == "changed" else
+              "  (inputs added since the last run, missing results made)"))
         ecx = load_ecx()
         ens = load_ens()
         if ens is not None:
@@ -1717,8 +1757,9 @@ def run_model(snowcap, snowcap_files, ecx_src, clms_on=False):
         if df is not None:
             all_dfs.append(df.assign(pred=label))
         del ecx, ens, e5
-        st["preds"][label] = {"clms": use_clms}
+        st["preds"][label] = {"clms": use_clms, "sig": sig}
         write_state(st)     # after every prediction, so a crash continues from here
+    SKIP_PNG = skip_png_product
 
     if all_dfs:
         combined = pd.concat(all_dfs, ignore_index=True)
